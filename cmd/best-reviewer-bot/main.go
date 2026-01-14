@@ -749,15 +749,10 @@ func (b *Bot) startHealthServer(ctx context.Context) {
 		}
 	})
 
-	// Web frontend with CSRF protection
+	// Web frontend routes with CSRF protection and security headers
 	csrf := http.NewCrossOriginProtection()
-	webMux := http.NewServeMux()
-	webMux.HandleFunc("GET /{$}", b.handleWebPage)
-	webMux.HandleFunc("POST /api/analyze", b.handleAnalyze)
-
-	// Wrap web routes with security headers and CSRF protection
-	http.Handle("/", securityHeaders(csrf.Handler(webMux)))
-	http.Handle("/api/", securityHeaders(csrf.Handler(webMux)))
+	http.Handle("GET /{$}", securityHeaders(csrf.Handler(http.HandlerFunc(b.handleWebPage))))
+	http.Handle("POST /api/analyze", securityHeaders(csrf.Handler(http.HandlerFunc(b.handleAnalyze))))
 
 	slog.Info("Starting server", "port", port)
 	server := &http.Server{

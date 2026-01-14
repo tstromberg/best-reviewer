@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>best-reviewer - Intelligent Code Review Assignment</title>
+    <title>grooveASSIGN - The right reviewer, every time</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -29,7 +29,7 @@
         h1 {
             font-size: 2rem;
             font-weight: 600;
-            color: #f0f6fc;
+            color: #ffe838;
             margin-bottom: 0.5rem;
         }
 
@@ -63,8 +63,8 @@
         }
 
         input[type="text"]:focus {
-            border-color: #58a6ff;
-            box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+            border-color: #ffe838;
+            box-shadow: 0 0 0 3px rgba(255, 232, 56, 0.15);
         }
 
         input[type="text"]::placeholder {
@@ -75,15 +75,15 @@
             padding: 0.75rem 1.5rem;
             font-size: 1rem;
             font-weight: 500;
-            background: #238636;
-            color: #fff;
+            background: #ffe838;
+            color: #000;
             border: none;
             border-radius: 6px;
             cursor: pointer;
             transition: background 0.15s;
         }
 
-        button:hover { background: #2ea043; }
+        button:hover { background: #eab308; }
         button:disabled { background: #21262d; color: #6e7681; cursor: not-allowed; }
 
         .results {
@@ -115,7 +115,7 @@
         }
 
         .pr-meta a {
-            color: #58a6ff;
+            color: #ffe838;
             text-decoration: none;
         }
 
@@ -151,7 +151,7 @@
         }
 
         .candidate-name a {
-            color: #58a6ff;
+            color: #ffe838;
             text-decoration: none;
         }
 
@@ -175,30 +175,9 @@
 
         .score-bar-fill {
             height: 100%;
-            background: linear-gradient(90deg, #238636, #3fb950);
+            background: linear-gradient(90deg, #eab308, #ffe838);
             border-radius: 3px;
             transition: width 0.3s;
-        }
-
-        .breakdown {
-            display: none;
-            padding-top: 0.75rem;
-            border-top: 1px solid #30363d;
-        }
-
-        .breakdown.visible {
-            display: block;
-        }
-
-        .breakdown-toggle {
-            font-size: 0.8rem;
-            color: #8b949e;
-            cursor: pointer;
-            user-select: none;
-        }
-
-        .breakdown-toggle:hover {
-            color: #c9d1d9;
         }
 
         .breakdown-items {
@@ -269,7 +248,7 @@
             width: 20px;
             height: 20px;
             border: 2px solid #30363d;
-            border-top-color: #58a6ff;
+            border-top-color: #ffe838;
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
             margin-right: 0.5rem;
@@ -294,7 +273,7 @@
         }
 
         footer a {
-            color: #58a6ff;
+            color: #ffe838;
             text-decoration: none;
         }
 
@@ -306,8 +285,8 @@
 <body>
     <div class="container">
         <header>
-            <h1>best-reviewer</h1>
-            <p class="tagline">Intelligent code review assignment based on file history and expertise</p>
+            <h1>grooveASSIGN</h1>
+            <p class="tagline">The right reviewer, every time. Line-level blame analysis, not just file history.</p>
         </header>
 
         <div class="input-section">
@@ -322,7 +301,7 @@
         </div>
 
         <footer>
-            <p>Public repositories only. <a href="https://github.com/codeGROOVE-dev/best-reviewer" target="_blank">Learn more</a></p>
+            <p>Public repositories only. <a href="https://docs.codegroove.dev/grooveassign/" target="_blank">Documentation</a> &middot; <a href="https://github.com/apps/grooveassign" target="_blank">Install</a></p>
         </footer>
     </div>
 
@@ -366,8 +345,9 @@
         }
 
         function renderResults(data) {
-            const pr = data.pr;
-            const maxScore = data.candidates.length > 0 ? data.candidates[0].final_score : 100;
+            const pr = data.pr || {};
+            const candidates = data.candidates || [];
+            const maxScore = candidates.length > 0 ? candidates[0].final_score : 100;
 
             let html = `
                 <div class="pr-info">
@@ -383,12 +363,12 @@
                 </div>
             `;
 
-            if (data.candidates.length === 0) {
+            if (candidates.length === 0) {
                 html += '<div class="empty-state">No suitable reviewers found for this PR.</div>';
             } else {
                 html += '<div class="candidates-header">Recommended Reviewers</div>';
 
-                data.candidates.forEach((c, i) => {
+                candidates.forEach(c => {
                     const pct = maxScore > 0 ? (c.final_score / maxScore * 100) : 0;
                     const breakdown = c.score_breakdown || {};
 
@@ -403,13 +383,8 @@
                             <div class="score-bar">
                                 <div class="score-bar-fill" style="width: ${pct}%"></div>
                             </div>
-                            <div class="breakdown-toggle" onclick="toggleBreakdown(${i})">
-                                Show score breakdown
-                            </div>
-                            <div id="breakdown-${i}" class="breakdown">
-                                <div class="breakdown-items">
-                                    ${renderBreakdown(breakdown)}
-                                </div>
+                            <div class="breakdown-items">
+                                ${renderBreakdown(breakdown)}
                             </div>
                         </div>
                     `;
@@ -437,11 +412,6 @@
                     return `<span class="breakdown-item ${cls}">${k}: ${sign}${v}</span>`;
                 })
                 .join('');
-        }
-
-        function toggleBreakdown(idx) {
-            const el = document.getElementById(`breakdown-${idx}`);
-            el.classList.toggle('visible');
         }
 
         function toggleDebug() {

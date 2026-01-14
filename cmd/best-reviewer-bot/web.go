@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,6 +52,9 @@ func (r *webRateLimiter) allow(ip string) bool {
 	if len(r.limiters) > 10000 {
 		n := 0
 		for k := range r.limiters {
+			if k == ip {
+				continue // Don't delete the entry we're about to use
+			}
 			delete(r.limiters, k)
 			n++
 			if n >= 5000 {
@@ -243,6 +247,23 @@ func (b *Bot) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, AnalyzeResponse{Error: "Repository not accessible. Only public repositories are supported."})
 		return
 	}
+
+	// Use installation token for GitHub API access
+	// Prefer the requested org's token if installed, otherwise fall back to codeGROOVE-dev
+	orgs, err := b.client.ListAppInstallations(ctx)
+	if err != nil || len(orgs) == 0 {
+		slog.Warn("No app installations available for API access", "error", err)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, AnalyzeResponse{Error: "Service temporarily unavailable"})
+		return
+	}
+
+	useOrg := "codeGROOVE-dev" // default fallback
+	if slices.Contains(orgs, owner) {
+		useOrg = owner
+	}
+	b.client.SetCurrentOrg(useOrg)
+	defer b.client.SetCurrentOrg("")
 
 	// Fetch PR details
 	pr, err := b.client.PullRequest(ctx, owner, repo, prNumber)
