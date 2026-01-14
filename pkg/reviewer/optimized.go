@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -54,9 +55,7 @@ func (f *Finder) findReviewersOptimized(ctx context.Context, pr *types.PullReque
 			if existing, exists := candidateMap[fc.username]; exists {
 				// Merge scores
 				existing.weight += fc.weight
-				for source, score := range fc.sourceScores {
-					existing.sourceScores[source] = score
-				}
+				maps.Copy(existing.sourceScores, fc.sourceScores)
 			} else {
 				candidateMap[fc.username] = &fc
 			}
@@ -247,10 +246,7 @@ func (f *Finder) findReviewersOptimized(ctx context.Context, pr *types.PullReque
 	}
 
 	// Only check workload for top 5 candidates (optimization to reduce API calls)
-	workloadCheckLimit := 5
-	if len(validCandidates) < workloadCheckLimit {
-		workloadCheckLimit = len(validCandidates)
-	}
+	workloadCheckLimit := min(5, len(validCandidates))
 
 	// Batch fetch workload for top candidates
 	topUsernames := make([]string, workloadCheckLimit)
@@ -570,9 +566,8 @@ func (*Finder) getChangedLines(pr *types.PullRequest, filename string) ([][2]int
 
 	// Parse the patch to extract changed line numbers
 	var lineRanges [][2]int
-	lines := strings.Split(targetFile.Patch, "\n")
 
-	for _, line := range lines {
+	for line := range strings.SplitSeq(targetFile.Patch, "\n") {
 		// Look for hunk headers like @@ -10,5 +10,7 @@
 		if strings.HasPrefix(line, "@@") {
 			// Extract the new file line range (second set of numbers)
@@ -597,10 +592,7 @@ func (*Finder) getChangedLines(pr *types.PullRequest, filename string) ([][2]int
 				}
 
 				if start > 0 {
-					end := start + count - 1
-					if end < start {
-						end = start
-					}
+					end := max(start+count-1, start)
 					lineRanges = append(lineRanges, [2]int{start, end})
 				}
 				break

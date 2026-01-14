@@ -315,10 +315,7 @@ func (b *Bot) processPR(ctx context.Context, pr *types.PullRequest) bool {
 	}
 
 	// Assign top 2 reviewers only
-	maxReviewers := 2
-	if len(candidates) < maxReviewers {
-		maxReviewers = len(candidates)
-	}
+	maxReviewers := min(2, len(candidates))
 	reviewers := make([]string, 0, maxReviewers)
 	for i := range maxReviewers {
 		reviewers = append(reviewers, candidates[i].Username)

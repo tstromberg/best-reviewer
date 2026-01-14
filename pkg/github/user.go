@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -179,13 +180,7 @@ func (c *Client) HasWriteAccess(ctx context.Context, owner, repo, username strin
 	// Check if we have the collaborators list cached
 	if cached, found := c.cache.Get(collabCacheKey); found {
 		if collabs, ok := cached.([]string); ok {
-			// Use the collaborators list for O(1) lookup
-			for _, collab := range collabs {
-				if collab == username {
-					return true
-				}
-			}
-			return false
+			return slices.Contains(collabs, username)
 		}
 	}
 

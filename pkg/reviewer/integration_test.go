@@ -800,10 +800,7 @@ func TestWorkloadPenalty(t *testing.T) {
 			// Simulate workload penalty logic
 			rawPenalty := tt.openPRCount * 10
 			maxPenalty := tt.expertiseScore / 2 // Cap at 50%
-			penalty := rawPenalty
-			if penalty > maxPenalty {
-				penalty = maxPenalty
-			}
+			penalty := min(rawPenalty, maxPenalty)
 
 			finalScore := tt.expertiseScore - penalty
 
@@ -984,10 +981,7 @@ func TestLargeScaleMultiDirectoryPR(t *testing.T) {
 	openPRs := 20
 	rawPenalty := openPRs * 10  // 200
 	maxPenalty := baseScore / 2 // 193
-	expectedPenalty := rawPenalty
-	if expectedPenalty > maxPenalty {
-		expectedPenalty = maxPenalty
-	}
+	expectedPenalty := min(rawPenalty, maxPenalty)
 	expectedFinal := baseScore - expectedPenalty
 
 	if expectedPenalty != 193 {

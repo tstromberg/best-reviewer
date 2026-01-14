@@ -179,14 +179,12 @@ func TestCache_ExpirationRaceCondition(t *testing.T) {
 	// Concurrently access the key while it's expiring
 	var wg sync.WaitGroup
 	for range 100 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 10 {
 				c.Get("key1")
 				time.Sleep(time.Millisecond)
 			}
-		}()
+		})
 	}
 
 	wg.Wait()

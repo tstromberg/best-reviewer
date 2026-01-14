@@ -539,7 +539,7 @@ func BenchmarkDiskCache_GetMemoryHit(b *testing.B) {
 	dc.Set("key", "value")
 
 	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		dc.Get("key")
 	}
 }
@@ -553,7 +553,7 @@ func BenchmarkDiskCache_GetDiskHit(b *testing.B) {
 	dc.Set("key", "value")
 
 	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		// Clear memory cache before each lookup
 		dc.mu.Lock()
 		dc.entries = make(map[string]Entry)

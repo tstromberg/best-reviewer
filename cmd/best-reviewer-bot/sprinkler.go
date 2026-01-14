@@ -131,10 +131,7 @@ func (sm *sprinklerMonitor) manageConnection(ctx context.Context) {
 				}
 
 				// Only retry if it's not an auth error (client already retried internally)
-				backoff := reconnectBackoff * time.Duration(attempts)
-				if backoff > 5*time.Minute {
-					backoff = 5 * time.Minute
-				}
+				backoff := min(reconnectBackoff*time.Duration(attempts), 5*time.Minute)
 
 				slog.Warn("WebSocket client gave up, will restart after backoff",
 					"component", "sprinkler",
