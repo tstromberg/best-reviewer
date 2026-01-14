@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/codeGROOVE-dev/best-reviewer/pkg/config"
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/github"
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/reviewer"
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/types"
@@ -131,9 +132,13 @@ func main() {
 	}
 	finder := reviewer.New(client, finderCfg)
 
+	// Create config manager for per-org configuration
+	configManager := config.NewManager(client)
+
 	bot := &Bot{
 		client:            client,
 		finder:            finder,
+		configManager:     configManager,
 		sprinklerMonitors: make(map[string]*sprinklerMonitor),
 		dryRun:            *dryRun,
 		minOpenTime:       *minOpenTime,
@@ -148,6 +153,7 @@ func main() {
 type Bot struct {
 	client            *github.Client
 	finder            *reviewer.Finder
+	configManager     *config.Manager
 	metrics           *MetricsCollector
 	sprinklerMonitors map[string]*sprinklerMonitor // One monitor per org
 	dryRun            bool
@@ -286,18 +292,32 @@ func (b *Bot) processPR(ctx context.Context, pr *types.PullRequest) bool {
 		return false
 	}
 
-	// Check CI/test status and apply delays
-	if !b.isPRReadyForReview(pr) {
+	// Get org-specific configuration
+	orgConfig := b.configManager.Config(ctx, pr.Owner)
+
+	// Check CI/test status and apply delays using org-specific grace periods
+	if !b.isPRReadyForReview(pr, orgConfig) {
 		return false
 	}
 
-	// Check PR age constraints
+	// Check PR age constraints (convert config hours to duration)
+	minAge := time.Duration(orgConfig.MinAge) * time.Hour
+	maxAge := time.Duration(orgConfig.MaxAge) * time.Hour
+
+	// Use command-line flags if they override defaults
+	if b.minOpenTime > minAge {
+		minAge = b.minOpenTime
+	}
+	if b.maxOpenTime < maxAge {
+		maxAge = b.maxOpenTime
+	}
+
 	lastActivity := pr.LastCommit
 	if pr.LastReview.After(lastActivity) {
 		lastActivity = pr.LastReview
 	}
 	timeSinceActivity := time.Since(lastActivity)
-	if timeSinceActivity < b.minOpenTime || timeSinceActivity > b.maxOpenTime {
+	if timeSinceActivity < minAge || timeSinceActivity > maxAge {
 		slog.Debug("Skipping PR outside time window", "pr", pr.Number, "repo", pr.Repository)
 		return false
 	}
@@ -314,8 +334,17 @@ func (b *Bot) processPR(ctx context.Context, pr *types.PullRequest) bool {
 		return false
 	}
 
-	// Assign top 2 reviewers only
-	maxReviewers := min(2, len(candidates))
+	// Filter out excluded users from candidates
+	if len(orgConfig.ExcludedUsers) > 0 {
+		candidates = filterExcludedUsers(candidates, orgConfig.ExcludedUsers)
+		if len(candidates) == 0 {
+			slog.Debug("No reviewers remaining after exclusion filter", "pr", pr.Number, "repo", pr.Repository)
+			return false
+		}
+	}
+
+	// Assign reviewers up to the org-specific maximum
+	maxReviewers := min(orgConfig.MaxReviewers, len(candidates))
 	reviewers := make([]string, 0, maxReviewers)
 	for i := range maxReviewers {
 		reviewers = append(reviewers, candidates[i].Username)
@@ -344,14 +373,29 @@ func (b *Bot) processPR(ctx context.Context, pr *types.PullRequest) bool {
 	return true
 }
 
+// filterExcludedUsers removes excluded users from the candidate list.
+func filterExcludedUsers(candidates []types.ReviewerCandidate, excluded []string) []types.ReviewerCandidate {
+	excludedMap := make(map[string]bool, len(excluded))
+	for _, u := range excluded {
+		excludedMap[u] = true
+	}
+
+	filtered := make([]types.ReviewerCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		if !excludedMap[c.Username] {
+			filtered = append(filtered, c)
+		}
+	}
+	return filtered
+}
+
 // isPRReadyForReview checks if a PR is ready for reviewer assignment based on CI/test status.
-// Returns false if tests are pending (wait 20 min) or failing (wait 90 min).
-// Also enforces a minimum 2 minute wait since last update.
-func (*Bot) isPRReadyForReview(pr *types.PullRequest) bool {
+// Uses org-specific grace periods from config.
+func (*Bot) isPRReadyForReview(pr *types.PullRequest, cfg *config.OrgConfig) bool {
 	timeSinceUpdate := time.Since(pr.UpdatedAt)
 
-	// Always wait at least 2 minutes since last update before assigning reviewers
-	const minWaitTime = 2 * time.Minute
+	// Wait for minimum grace period since last update before assigning reviewers
+	minWaitTime := time.Duration(cfg.MinGracePeriod) * time.Minute
 	if timeSinceUpdate < minWaitTime {
 		slog.Debug("Skipping PR - waiting for minimum time since last update",
 			"pr", pr.Number,
@@ -363,37 +407,41 @@ func (*Bot) isPRReadyForReview(pr *types.PullRequest) bool {
 
 	switch pr.TestState {
 	case "failing":
-		// Wait 90 minutes after last update if tests are failing
-		if timeSinceUpdate < 90*time.Minute {
+		// Wait for failing test grace period after last update
+		failingGrace := time.Duration(cfg.FailingTestGrace) * time.Minute
+		if timeSinceUpdate < failingGrace {
 			slog.Debug("Skipping PR with failing tests - waiting for fixes",
 				"pr", pr.Number,
 				"repo", pr.Repository,
 				"test_state", pr.TestState,
 				"time_since_update", timeSinceUpdate.Round(time.Minute),
-				"wait_remaining", (90*time.Minute - timeSinceUpdate).Round(time.Minute))
+				"wait_remaining", (failingGrace - timeSinceUpdate).Round(time.Minute))
 			return false
 		}
-		slog.Info("Assigning reviewers to PR with failing tests after 90 minute grace period",
+		slog.Info("Assigning reviewers to PR with failing tests after grace period",
 			"pr", pr.Number,
 			"repo", pr.Repository,
 			"test_state", pr.TestState,
+			"grace_minutes", cfg.FailingTestGrace,
 			"time_since_update", timeSinceUpdate.Round(time.Minute))
 
 	case "pending", "queued", "running":
-		// Wait 20 minutes after last update if tests are pending
-		if timeSinceUpdate < 20*time.Minute {
+		// Wait for pending test grace period after last update
+		pendingGrace := time.Duration(cfg.PendingTestGrace) * time.Minute
+		if timeSinceUpdate < pendingGrace {
 			slog.Debug("Skipping PR with pending tests - waiting for completion",
 				"pr", pr.Number,
 				"repo", pr.Repository,
 				"test_state", pr.TestState,
 				"time_since_update", timeSinceUpdate.Round(time.Minute),
-				"wait_remaining", (20*time.Minute - timeSinceUpdate).Round(time.Minute))
+				"wait_remaining", (pendingGrace - timeSinceUpdate).Round(time.Minute))
 			return false
 		}
-		slog.Info("Assigning reviewers to PR with pending tests after 20 minute grace period",
+		slog.Info("Assigning reviewers to PR with pending tests after grace period",
 			"pr", pr.Number,
 			"repo", pr.Repository,
 			"test_state", pr.TestState,
+			"grace_minutes", cfg.PendingTestGrace,
 			"time_since_update", timeSinceUpdate.Round(time.Minute))
 
 	case "passing", "":

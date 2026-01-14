@@ -19,4 +19,5 @@ require (
 	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/puzpuzpuz/xsync/v4 v4.3.0 // indirect
 	golang.org/x/net v0.49.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

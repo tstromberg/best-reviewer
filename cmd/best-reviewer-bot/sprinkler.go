@@ -185,7 +185,7 @@ func (sm *sprinklerMonitor) connectWebSocket(ctx context.Context) error {
 			}
 			return token, nil
 		},
-		EventTypes:     []string{"pull_request"},
+		EventTypes:     []string{"pull_request", "push"},
 		UserEventsOnly: false,
 		Verbose:        false,
 		NoReconnect:    false,
@@ -298,13 +298,20 @@ func (sm *sprinklerMonitor) monitorHealth(ctx context.Context) {
 	}
 }
 
-// handleEvent processes incoming PR events.
+// handleEvent processes incoming events (pull_request and push).
 func (sm *sprinklerMonitor) handleEvent(event client.Event) {
-	// Filter by event type
-	if event.Type != "pull_request" {
-		return
+	switch event.Type {
+	case "pull_request":
+		sm.handlePullRequestEvent(event)
+	case "push":
+		sm.handlePushEvent(event)
+	default:
+		// Ignore other event types
 	}
+}
 
+// handlePullRequestEvent processes PR events.
+func (sm *sprinklerMonitor) handlePullRequestEvent(event client.Event) {
 	if event.URL == "" {
 		slog.Warn("Received PR event with empty URL", "component", "sprinkler")
 		return
@@ -354,6 +361,39 @@ func (sm *sprinklerMonitor) handleEvent(event client.Event) {
 	case sm.eventChan <- event.URL:
 	default:
 		slog.Warn("Event channel full, dropping event", "component", "sprinkler", "url", event.URL)
+	}
+}
+
+// handlePushEvent processes push events, specifically for .codeGROOVE config changes.
+func (sm *sprinklerMonitor) handlePushEvent(event client.Event) {
+	if event.URL == "" {
+		return
+	}
+
+	// Extract repo from URL (format: https://github.com/org/repo)
+	parts := strings.Split(event.URL, "/")
+	const minParts = 5
+	if len(parts) < minParts || parts[2] != "github.com" {
+		return
+	}
+	org := parts[3]
+	repo := parts[4]
+
+	// Verify this event is for our org
+	if org != sm.org {
+		return
+	}
+
+	// Check if this is a push to the .codeGROOVE repo
+	if repo == ".codeGROOVE" {
+		slog.Info("Detected push to .codeGROOVE repo, invalidating config cache",
+			"component", "sprinkler",
+			"org", org)
+
+		// Invalidate config cache for this org
+		if sm.bot.configManager != nil {
+			sm.bot.configManager.InvalidateConfig(org)
+		}
 	}
 }
 
