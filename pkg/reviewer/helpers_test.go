@@ -146,10 +146,10 @@ func TestParsePRNode_NotMerged(t *testing.T) {
 	}
 }
 
-func TestExtractReviewers_HappyPath(t *testing.T) {
-	// Note: extractReviewers is tested indirectly via parsePRNode
-	// Direct testing requires matching the exact GraphQL response structure
+func TestParsePRNode_WithReviewers(t *testing.T) {
 	prData := map[string]any{
+		"number": float64(123),
+		"merged": true,
 		"reviews": map[string]any{
 			"nodes": []any{
 				map[string]any{
@@ -161,21 +161,33 @@ func TestExtractReviewers_HappyPath(t *testing.T) {
 		},
 	}
 
-	// Just verify it doesn't crash and returns a slice
-	reviewers := extractReviewers(prData)
-	if reviewers == nil {
-		t.Error("expected non-nil reviewers slice")
+	pr := parsePRNode(prData)
+	if pr == nil {
+		t.Fatal("expected non-nil PR")
+	}
+	if len(pr.Reviewers) != 1 {
+		t.Errorf("expected 1 reviewer, got %d", len(pr.Reviewers))
+	}
+	if pr.Reviewers[0] != "reviewer1" {
+		t.Errorf("expected reviewer1, got %q", pr.Reviewers[0])
 	}
 }
 
-func TestExtractReviewers_NoReviewers(t *testing.T) {
-	reviewsData := map[string]any{
-		"nodes": []any{},
+func TestParsePRNode_EmptyReviewNodes(t *testing.T) {
+	prData := map[string]any{
+		"number": float64(123),
+		"merged": true,
+		"reviews": map[string]any{
+			"nodes": []any{},
+		},
 	}
 
-	reviewers := extractReviewers(reviewsData)
-	if len(reviewers) != 0 {
-		t.Errorf("expected 0 reviewers, got %d", len(reviewers))
+	pr := parsePRNode(prData)
+	if pr == nil {
+		t.Fatal("expected non-nil PR")
+	}
+	if len(pr.Reviewers) != 0 {
+		t.Errorf("expected 0 reviewers, got %d", len(pr.Reviewers))
 	}
 }
 
@@ -244,17 +256,24 @@ func TestSliceNodes_WrongType(t *testing.T) {
 	}
 }
 
-func TestExtractReviewers_MissingAuthor(t *testing.T) {
-	reviewsData := map[string]any{
-		"nodes": []any{
-			map[string]any{
-				"state": "APPROVED", // No author field
+func TestParsePRNode_ReviewMissingAuthor(t *testing.T) {
+	prData := map[string]any{
+		"number": float64(123),
+		"merged": true,
+		"reviews": map[string]any{
+			"nodes": []any{
+				map[string]any{
+					"state": "APPROVED", // No author field
+				},
 			},
 		},
 	}
 
-	reviewers := extractReviewers(reviewsData)
-	if len(reviewers) != 0 {
-		t.Errorf("expected 0 reviewers when author is missing, got %d", len(reviewers))
+	pr := parsePRNode(prData)
+	if pr == nil {
+		t.Fatal("expected non-nil PR")
+	}
+	if len(pr.Reviewers) != 0 {
+		t.Errorf("expected 0 reviewers when author is missing, got %d", len(pr.Reviewers))
 	}
 }

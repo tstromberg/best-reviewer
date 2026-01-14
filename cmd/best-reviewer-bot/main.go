@@ -139,6 +139,7 @@ func main() {
 		client:            client,
 		finder:            finder,
 		configManager:     configManager,
+		webLimiter:        newWebRateLimiter(),
 		sprinklerMonitors: make(map[string]*sprinklerMonitor),
 		dryRun:            *dryRun,
 		minOpenTime:       *minOpenTime,
@@ -155,6 +156,7 @@ type Bot struct {
 	finder            *reviewer.Finder
 	configManager     *config.Manager
 	metrics           *MetricsCollector
+	webLimiter        *webRateLimiter              // Rate limiter for web frontend
 	sprinklerMonitors map[string]*sprinklerMonitor // One monitor per org
 	dryRun            bool
 	minOpenTime       time.Duration
@@ -346,15 +348,22 @@ func (b *Bot) processPR(ctx context.Context, pr *types.PullRequest) bool {
 	// Assign reviewers up to the org-specific maximum
 	maxReviewers := min(orgConfig.MaxReviewers, len(candidates))
 	reviewers := make([]string, 0, maxReviewers)
+	reviewerDetails := make([]map[string]any, 0, maxReviewers)
 	for i := range maxReviewers {
-		reviewers = append(reviewers, candidates[i].Username)
+		c := candidates[i]
+		reviewers = append(reviewers, c.Username)
+		reviewerDetails = append(reviewerDetails, map[string]any{
+			"username": c.Username,
+			"score":    c.ContextScore,
+			"method":   c.SelectionMethod,
+		})
 	}
 
 	if b.dryRun {
 		slog.Info("Would assign reviewers (dry-run)",
 			"pr", pr.Number,
 			"repo", pr.Repository,
-			"reviewers", reviewers)
+			"reviewers", reviewerDetails)
 		return true
 	}
 
@@ -369,7 +378,7 @@ func (b *Bot) processPR(ctx context.Context, pr *types.PullRequest) bool {
 	slog.Info("Assigned reviewers",
 		"pr", pr.Number,
 		"repo", pr.Repository,
-		"reviewers", reviewers)
+		"reviewers", reviewerDetails)
 	return true
 }
 
@@ -740,15 +749,21 @@ func (b *Bot) startHealthServer(ctx context.Context) {
 		}
 	})
 
-	http.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	// Web frontend with CSRF protection
+	csrf := http.NewCrossOriginProtection()
+	webMux := http.NewServeMux()
+	webMux.HandleFunc("GET /{$}", b.handleWebPage)
+	webMux.HandleFunc("POST /api/analyze", b.handleAnalyze)
 
-	slog.Info("Starting health server", "port", port)
+	// Wrap web routes with security headers and CSRF protection
+	http.Handle("/", securityHeaders(csrf.Handler(webMux)))
+	http.Handle("/api/", securityHeaders(csrf.Handler(webMux)))
+
+	slog.Info("Starting server", "port", port)
 	server := &http.Server{
 		Addr:         ":" + port,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: 120 * time.Second, // Allow time for PR analysis
 		IdleTimeout:  60 * time.Second,
 	}
 

@@ -34,6 +34,7 @@ type ChangedFile struct {
 // ReviewerCandidate represents a potential reviewer with scoring metadata.
 type ReviewerCandidate struct {
 	LastActivity      time.Time
+	SourceScores      map[string]int // Breakdown by source: "blame-author" -> 45, "workload" -> -10, etc.
 	Username          string
 	SelectionMethod   string
 	AuthorAssociation string

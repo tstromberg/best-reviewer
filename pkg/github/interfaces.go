@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/codeGROOVE-dev/best-reviewer/pkg/activity"
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/types"
+	"github.com/codeGROOVE-dev/fido"
 )
 
 // HTTPDoer provides an interface for making HTTP requests.
@@ -56,11 +58,17 @@ type API interface {
 	// GraphQL operations
 	MakeGraphQLRequest(ctx context.Context, query string, variables map[string]any) (map[string]any, error)
 
+	// Activity operations
+	FetchTimeline(ctx context.Context, org, username string) (*activity.Timeline, error)
+
 	// HTTP operations
 	MakeRequest(ctx context.Context, method, apiURL string, body any) (*http.Response, error)
 
 	// App installation operations
 	ListAppInstallations(ctx context.Context) ([]string, error)
+
+	// Cache returns the persistent cache for sharing across components
+	Cache() *fido.TieredCache[string, any]
 }
 
 // PrxClient defines the interface for enhanced PR data fetching.

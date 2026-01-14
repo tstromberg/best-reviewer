@@ -26,10 +26,6 @@ func TestNew(t *testing.T) {
 		t.Error("expected non-nil client")
 	}
 
-	if finder.cache == nil {
-		t.Error("expected non-nil cache")
-	}
-
 	if finder.prCountCache != time.Hour {
 		t.Errorf("expected prCountCache to be 1 hour, got %v", finder.prCountCache)
 	}

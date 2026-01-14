@@ -9,13 +9,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/codeGROOVE-dev/fido"
-	"github.com/codeGROOVE-dev/fido/pkg/store/localfs"
+	"github.com/codeGROOVE-dev/fido/pkg/store/cloudrun"
 	"github.com/codeGROOVE-dev/retry"
 )
 
@@ -55,9 +54,9 @@ type Config struct {
 // New creates a new GitHub API client using gh auth token or GitHub App authentication.
 func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.UseAppAuth {
-		return newAppAuthClient(ctx, cfg.AppID, cfg.AppKeyPath, cfg.HTTPTimeout, cfg.CacheTTL, cfg.CacheDir)
+		return newAppAuthClient(ctx, cfg.AppID, cfg.AppKeyPath, cfg.HTTPTimeout, cfg.CacheTTL)
 	}
-	return newPersonalTokenClient(ctx, cfg.Token, cfg.HTTPTimeout, cfg.CacheTTL, cfg.CacheDir)
+	return newPersonalTokenClient(ctx, cfg.Token, cfg.HTTPTimeout, cfg.CacheTTL)
 }
 
 // SetCurrentOrg sets the current organization being processed.
@@ -256,18 +255,18 @@ func (c *Client) AddReviewers(ctx context.Context, owner, repo string, prNumber 
 	return nil
 }
 
-// newCache creates a fido.TieredCache with disk persistence.
-func newCache(ttl time.Duration, cacheDir string) (*fido.TieredCache[string, any], error) {
-	if cacheDir == "" {
-		var err error
-		cacheDir, err = os.UserCacheDir()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get user cache dir: %w", err)
-		}
-	}
-	store, err := localfs.New[string, any]("best-reviewer", cacheDir)
+// Cache returns the persistent cache for sharing across components.
+func (c *Client) Cache() *fido.TieredCache[string, any] {
+	return c.cache
+}
+
+// newCache creates a fido.TieredCache with automatic backend selection.
+// In Cloud Run: uses Datastore for persistence across instances.
+// Outside Cloud Run: uses local filesystem.
+func newCache(ctx context.Context, ttl time.Duration) (*fido.TieredCache[string, any], error) {
+	store, err := cloudrun.New[string, any](ctx, "best-reviewer")
 	if err != nil {
-		return nil, fmt.Errorf("failed to create disk store in %s: %w", cacheDir, err)
+		return nil, fmt.Errorf("failed to create store: %w", err)
 	}
 	tc, err := fido.NewTiered(store, fido.TTL(ttl))
 	if err != nil {

@@ -8,16 +8,16 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/codeGROOVE-dev/best-reviewer/pkg/activity"
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/github"
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/types"
-	"github.com/codeGROOVE-dev/fido"
 )
 
 // Finder finds and selects reviewers for pull requests.
 type Finder struct {
-	client       github.API
-	cache        *fido.Cache[string, any]
-	prCountCache time.Duration
+	client          github.API
+	activityManager *activity.Manager
+	prCountCache    time.Duration
 }
 
 // Config holds configuration for the reviewer finder.
@@ -27,10 +27,16 @@ type Config struct {
 
 // New creates a new Finder with the given GitHub client and configuration.
 func New(client github.API, cfg Config) *Finder {
+	// Create activity manager with GitHub client as the fetcher
+	// Cache for 15 days since activity patterns change slowly
+	actMgr := activity.NewManager(client, activity.ManagerConfig{
+		CacheTTL: 15 * 24 * time.Hour,
+	})
+
 	return &Finder{
-		client:       client,
-		cache:        fido.New[string, any](fido.TTL(cacheTTL)),
-		prCountCache: cfg.PRCountCache,
+		client:          client,
+		activityManager: actMgr,
+		prCountCache:    cfg.PRCountCache,
 	}
 }
 
@@ -100,7 +106,10 @@ func (f *Finder) checkSmallTeamProject(ctx context.Context, pr *types.PullReques
 	}
 
 	cacheKey := "small-team:" + pr.Owner + ":" + pr.Repository
-	if cached, found := f.cache.Get(cacheKey); found {
+	cache := f.client.Cache()
+	if cached, found, err := cache.Get(ctx, cacheKey); err != nil {
+		slog.Debug("Cache read error", "key", cacheKey, "error", err)
+	} else if found {
 		if result, ok := cached.(cachedResult); ok {
 			slog.DebugContext(ctx, "Small team check cached", "count", result.Count)
 			return result.Members, result.Count, nil
@@ -141,7 +150,9 @@ func (f *Finder) checkSmallTeamProject(ctx context.Context, pr *types.PullReques
 		count = -1
 	}
 
-	f.cache.SetTTL(cacheKey, cachedResult{Members: result, Count: count}, 6*time.Hour)
+	if cacheErr := cache.SetAsyncTTL(ctx, cacheKey, cachedResult{Members: result, Count: count}, 6*time.Hour); cacheErr != nil {
+		slog.Warn("Failed to cache small team result", "key", cacheKey, "error", cacheErr)
+	}
 
 	return result, count, nil
 }

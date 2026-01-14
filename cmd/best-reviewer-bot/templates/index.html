@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>best-reviewer - Intelligent Code Review Assignment</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2rem 1rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        h1 {
+            font-size: 2rem;
+            font-weight: 600;
+            color: #f0f6fc;
+            margin-bottom: 0.5rem;
+        }
+
+        .tagline {
+            color: #8b949e;
+            font-size: 1rem;
+        }
+
+        .input-section {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 0.75rem 1rem;
+            font-size: 1rem;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            color: #c9d1d9;
+            outline: none;
+        }
+
+        input[type="text"]:focus {
+            border-color: #58a6ff;
+            box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+        }
+
+        input[type="text"]::placeholder {
+            color: #6e7681;
+        }
+
+        button {
+            padding: 0.75rem 1.5rem;
+            font-size: 1rem;
+            font-weight: 500;
+            background: #238636;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        button:hover { background: #2ea043; }
+        button:disabled { background: #21262d; color: #6e7681; cursor: not-allowed; }
+
+        .results {
+            display: none;
+        }
+
+        .results.visible {
+            display: block;
+        }
+
+        .pr-info {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 1rem 1.25rem;
+            margin-bottom: 1rem;
+        }
+
+        .pr-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #f0f6fc;
+            margin-bottom: 0.5rem;
+        }
+
+        .pr-meta {
+            font-size: 0.875rem;
+            color: #8b949e;
+        }
+
+        .pr-meta a {
+            color: #58a6ff;
+            text-decoration: none;
+        }
+
+        .pr-meta a:hover {
+            text-decoration: underline;
+        }
+
+        .candidates-header {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #f0f6fc;
+            margin-bottom: 0.75rem;
+        }
+
+        .candidate {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 1rem 1.25rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .candidate-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .candidate-name {
+            font-weight: 600;
+            color: #f0f6fc;
+        }
+
+        .candidate-name a {
+            color: #58a6ff;
+            text-decoration: none;
+        }
+
+        .candidate-name a:hover {
+            text-decoration: underline;
+        }
+
+        .candidate-score {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #3fb950;
+        }
+
+        .score-bar {
+            height: 6px;
+            background: #21262d;
+            border-radius: 3px;
+            margin-bottom: 0.75rem;
+            overflow: hidden;
+        }
+
+        .score-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #238636, #3fb950);
+            border-radius: 3px;
+            transition: width 0.3s;
+        }
+
+        .breakdown {
+            display: none;
+            padding-top: 0.75rem;
+            border-top: 1px solid #30363d;
+        }
+
+        .breakdown.visible {
+            display: block;
+        }
+
+        .breakdown-toggle {
+            font-size: 0.8rem;
+            color: #8b949e;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .breakdown-toggle:hover {
+            color: #c9d1d9;
+        }
+
+        .breakdown-items {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        .breakdown-item {
+            font-size: 0.8rem;
+            padding: 0.25rem 0.5rem;
+            background: #21262d;
+            border-radius: 4px;
+        }
+
+        .breakdown-item.positive { color: #3fb950; }
+        .breakdown-item.negative { color: #f85149; }
+
+        .debug-section {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid #30363d;
+        }
+
+        .debug-toggle {
+            font-size: 0.875rem;
+            color: #8b949e;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .debug-toggle:hover {
+            color: #c9d1d9;
+        }
+
+        .debug-content {
+            display: none;
+            margin-top: 0.75rem;
+            padding: 0.75rem;
+            background: #0d1117;
+            border-radius: 4px;
+            font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+            font-size: 0.8rem;
+            color: #8b949e;
+        }
+
+        .debug-content.visible {
+            display: block;
+        }
+
+        .error {
+            background: #3d1f1f;
+            border: 1px solid #f85149;
+            border-radius: 6px;
+            padding: 1rem 1.25rem;
+            color: #f85149;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: #8b949e;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #30363d;
+            border-top-color: #58a6ff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 0.5rem;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 2rem;
+            color: #8b949e;
+        }
+
+        footer {
+            margin-top: 3rem;
+            text-align: center;
+            font-size: 0.8rem;
+            color: #6e7681;
+        }
+
+        footer a {
+            color: #58a6ff;
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>best-reviewer</h1>
+            <p class="tagline">Intelligent code review assignment based on file history and expertise</p>
+        </header>
+
+        <div class="input-section">
+            <div class="input-group">
+                <input type="text" id="prUrl" placeholder="https://github.com/owner/repo/pull/123" autocomplete="off">
+                <button id="analyzeBtn" onclick="analyze()">Analyze</button>
+            </div>
+        </div>
+
+        <div id="results" class="results">
+            <!-- Results will be rendered here -->
+        </div>
+
+        <footer>
+            <p>Public repositories only. <a href="https://github.com/codeGROOVE-dev/best-reviewer" target="_blank">Learn more</a></p>
+        </footer>
+    </div>
+
+    <script>
+        const input = document.getElementById('prUrl');
+        const btn = document.getElementById('analyzeBtn');
+        const results = document.getElementById('results');
+
+        input.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') analyze();
+        });
+
+        async function analyze() {
+            const url = input.value.trim();
+            if (!url) return;
+
+            btn.disabled = true;
+            results.className = 'results visible';
+            results.innerHTML = '<div class="loading"><span class="spinner"></span>Analyzing...</div>';
+
+            try {
+                const resp = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+
+                const data = await resp.json();
+
+                if (data.error) {
+                    results.innerHTML = `<div class="error">${escapeHtml(data.error)}</div>`;
+                    return;
+                }
+
+                renderResults(data);
+            } catch (err) {
+                results.innerHTML = `<div class="error">Failed to analyze: ${escapeHtml(err.message)}</div>`;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function renderResults(data) {
+            const pr = data.pr;
+            const maxScore = data.candidates.length > 0 ? data.candidates[0].final_score : 100;
+
+            let html = `
+                <div class="pr-info">
+                    <div class="pr-title">${escapeHtml(pr.title)}</div>
+                    <div class="pr-meta">
+                        <a href="https://github.com/${pr.owner}/${pr.repository}/pull/${pr.number}" target="_blank">
+                            ${pr.owner}/${pr.repository}#${pr.number}
+                        </a>
+                        &middot; by ${escapeHtml(pr.author)}
+                        &middot; ${pr.files_changed} file${pr.files_changed !== 1 ? 's' : ''} changed
+                        &middot; ${pr.state}
+                    </div>
+                </div>
+            `;
+
+            if (data.candidates.length === 0) {
+                html += '<div class="empty-state">No suitable reviewers found for this PR.</div>';
+            } else {
+                html += '<div class="candidates-header">Recommended Reviewers</div>';
+
+                data.candidates.forEach((c, i) => {
+                    const pct = maxScore > 0 ? (c.final_score / maxScore * 100) : 0;
+                    const breakdown = c.score_breakdown || {};
+
+                    html += `
+                        <div class="candidate">
+                            <div class="candidate-header">
+                                <span class="candidate-name">
+                                    <a href="https://github.com/${c.username}" target="_blank">@${escapeHtml(c.username)}</a>
+                                </span>
+                                <span class="candidate-score">${c.final_score}</span>
+                            </div>
+                            <div class="score-bar">
+                                <div class="score-bar-fill" style="width: ${pct}%"></div>
+                            </div>
+                            <div class="breakdown-toggle" onclick="toggleBreakdown(${i})">
+                                Show score breakdown
+                            </div>
+                            <div id="breakdown-${i}" class="breakdown">
+                                <div class="breakdown-items">
+                                    ${renderBreakdown(breakdown)}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+
+            html += `
+                <div class="debug-section">
+                    <div class="debug-toggle" onclick="toggleDebug()">Show debug info</div>
+                    <div id="debug-content" class="debug-content">
+                        <pre>${JSON.stringify(data.debug, null, 2)}</pre>
+                    </div>
+                </div>
+            `;
+
+            results.innerHTML = html;
+        }
+
+        function renderBreakdown(breakdown) {
+            return Object.entries(breakdown)
+                .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+                .map(([k, v]) => {
+                    const cls = v >= 0 ? 'positive' : 'negative';
+                    const sign = v >= 0 ? '+' : '';
+                    return `<span class="breakdown-item ${cls}">${k}: ${sign}${v}</span>`;
+                })
+                .join('');
+        }
+
+        function toggleBreakdown(idx) {
+            const el = document.getElementById(`breakdown-${idx}`);
+            el.classList.toggle('visible');
+        }
+
+        function toggleDebug() {
+            document.getElementById('debug-content').classList.toggle('visible');
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str.replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+    </script>
+</body>
+</html>

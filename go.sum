@@ -1,7 +1,13 @@
+github.com/codeGROOVE-dev/ds9 v0.8.0 h1:A23VvL1YzUBZyXNYmF5u0R6nPcxQitPeLo8FFk6OiUs=
+github.com/codeGROOVE-dev/ds9 v0.8.0/go.mod h1:0UDipxF1DADfqM5GtjefgB2u+EXdDgOKmxVvrSGLHoM=
 github.com/codeGROOVE-dev/fido v1.10.0 h1:i4Wb6LDd5nD/4Fnp47KAVUVhG1O1mN5jSRbCYPpBYjw=
 github.com/codeGROOVE-dev/fido v1.10.0/go.mod h1:/mqfMeKCTYTGt/Y0cWm6gh8gYBKG1w8xBsTDmu+A/pU=
+github.com/codeGROOVE-dev/fido/pkg/store/cloudrun v1.10.0 h1:0Wvs3JE+TI8GsEkh0jg0SglyFyIkBewPSl0PTUSVqEo=
+github.com/codeGROOVE-dev/fido/pkg/store/cloudrun v1.10.0/go.mod h1:MaxO6QGv89FrZB1D+stiZjRcbaMUfiw7yYGkaqOoJ2k=
 github.com/codeGROOVE-dev/fido/pkg/store/compress v1.10.0 h1:W3AYtR6eyPHQ8QhTsuqjNZYWk/Fev0cJiAiuw04uhlk=
 github.com/codeGROOVE-dev/fido/pkg/store/compress v1.10.0/go.mod h1:0hFYQ8Y6jfrYuJb8eBimYz66tg7DDuVWbZqaI944LQM=
+github.com/codeGROOVE-dev/fido/pkg/store/datastore v1.10.0 h1:vCsLeESGQvW7F8pJJimZhRjzWmrQg1WZgT22om9fT/Q=
+github.com/codeGROOVE-dev/fido/pkg/store/datastore v1.10.0/go.mod h1:LtpO9TUi92D7uLBXJu+kLWVpRmEtVRAWVB2EdzNU0JQ=
 github.com/codeGROOVE-dev/fido/pkg/store/localfs v1.10.0 h1:oaPwuHHBuzhsWnPm7UCxgwjz7+jG3O0JenSSgPSwqv8=
 github.com/codeGROOVE-dev/fido/pkg/store/localfs v1.10.0/go.mod h1:zUGzODSWykosAod0IHycxdxUOMcd2eVqd6eUdOsU73E=
 github.com/codeGROOVE-dev/fido/pkg/store/null v1.10.0 h1:3F6absPj3zUaPsK7ohTTlwOXZ2XAr+/TudIPCYPamsw=
@@ -24,6 +30,9 @@ github.com/puzpuzpuz/xsync/v4 v4.3.0 h1:w/bWkEJdYuRNYhHn5eXnIT8LzDM1O629X1I9MJSk
 github.com/puzpuzpuz/xsync/v4 v4.3.0/go.mod h1:VJDmTCJMBt8igNxnkQd86r+8KUeN1quSfNKu5bLYFQo=
 golang.org/x/net v0.49.0 h1:eeHFmOGUTtaaPSGNmjBKpbng9MulQsJURQUAfUwY++o=
 golang.org/x/net v0.49.0/go.mod h1:/ysNB2EvaqvesRkuLAyjI1ycPZlQHM3q01F02UY/MV8=
+golang.org/x/time v0.14.0 h1:MRx4UaLrDotUKUdCIqzPC48t1Y9hANFKIRpNx+Te8PI=
+golang.org/x/time v0.14.0/go.mod h1:eL/Oa2bBBK0TkX57Fyni+NgnyQQN4LitPmob2Hjnqw4=
+gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=

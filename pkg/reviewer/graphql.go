@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/types"
@@ -18,6 +19,25 @@ func (f *Finder) blameForLines(ctx context.Context, owner, repo, filepath string
 
 	if len(lineRanges) == 0 {
 		return nil, nil, nil
+	}
+
+	// Check cache for blame results (keyed by file path, not line ranges, for better cache hit rate)
+	cache := f.client.Cache()
+	cacheKey := fmt.Sprintf("blame:%s/%s:%s", owner, repo, filepath)
+
+	type blameResult struct {
+		OverlappingPRs []types.PRInfo
+		FilePRs        []types.PRInfo
+		LineRanges     [][2]int
+	}
+
+	if cached, found, err := cache.Get(ctx, cacheKey); err != nil {
+		slog.Debug("Blame cache read error", "key", cacheKey, "error", err)
+	} else if found {
+		if result, ok := cached.(blameResult); ok && slices.Equal(result.LineRanges, lineRanges) {
+			slog.InfoContext(ctx, "Using cached blame results", "file", filepath)
+			return result.OverlappingPRs, result.FilePRs, nil
+		}
 	}
 
 	// GitHub blame API gives us commits - we need to map commits to PRs
@@ -86,6 +106,15 @@ func (f *Finder) blameForLines(ctx context.Context, owner, repo, filepath string
 	// Parse blame results - get both overlapping and all PRs
 	overlappingPRs, filePRs = f.parseBlameResults(result, lineRanges)
 	slog.InfoContext(ctx, "Blame API found PRs", "file", filepath, "overlapping_count", len(overlappingPRs), "file_contributors_count", len(filePRs))
+
+	// Cache the results
+	if cacheErr := cache.SetAsyncTTL(ctx, cacheKey, blameResult{
+		OverlappingPRs: overlappingPRs,
+		FilePRs:        filePRs,
+		LineRanges:     lineRanges,
+	}, cacheTTL); cacheErr != nil {
+		slog.Warn("Failed to cache blame results", "key", cacheKey, "error", cacheErr)
+	}
 
 	return overlappingPRs, filePRs, nil
 }
@@ -313,8 +342,11 @@ func (f *Finder) recentCommitsInDirectory(ctx context.Context, owner, repo, dirP
 	limit := 10
 	slog.InfoContext(ctx, "Querying recent commits in directory", "owner", owner, "repo", repo, "dir", dirPath, "limit", limit)
 
+	cache := f.client.Cache()
 	cacheKey := fmt.Sprintf("commits-dir:%s/%s:%s:%d", owner, repo, dirPath, limit)
-	if cached, found := f.cache.Get(cacheKey); found {
+	if cached, found, err := cache.Get(ctx, cacheKey); err != nil {
+		slog.Debug("Cache read error", "key", cacheKey, "error", err)
+	} else if found {
 		slog.DebugContext(ctx, "Cache hit", "key", cacheKey)
 		if prs, ok := cached.([]types.PRInfo); ok {
 			return prs, nil
@@ -382,7 +414,9 @@ func (f *Finder) recentCommitsInDirectory(ctx context.Context, owner, repo, dirP
 	prs := f.parseDirectoryCommitsFromGraphQL(result)
 	slog.InfoContext(ctx, "Parsed directory commits", "unique_prs", len(prs), "from_commits", limit)
 
-	f.cache.Set(cacheKey, prs)
+	if cacheErr := cache.SetAsyncTTL(ctx, cacheKey, prs, cacheTTL); cacheErr != nil {
+		slog.Warn("Failed to cache directory commits", "key", cacheKey, "error", cacheErr)
+	}
 	return prs, nil
 }
 
@@ -476,8 +510,11 @@ func (*Finder) parseDirectoryCommitsFromGraphQL(result map[string]any) []types.P
 func (f *Finder) recentPRsInProject(ctx context.Context, owner, repo string) ([]types.PRInfo, error) {
 	slog.InfoContext(ctx, "Querying recent merged PRs", "owner", owner, "repo", repo)
 
+	cache := f.client.Cache()
 	cacheKey := fmt.Sprintf("prs-project:%s/%s", owner, repo)
-	if cached, found := f.cache.Get(cacheKey); found {
+	if cached, found, err := cache.Get(ctx, cacheKey); err != nil {
+		slog.Debug("Cache read error", "key", cacheKey, "error", err)
+	} else if found {
 		slog.DebugContext(ctx, "Cache hit", "key", cacheKey)
 		if prs, ok := cached.([]types.PRInfo); ok {
 			return prs, nil
@@ -559,14 +596,18 @@ func (f *Finder) recentPRsInProject(ctx context.Context, owner, repo string) ([]
 	hasNextPage, ok := pageInfo["hasNextPage"].(bool)
 	if !ok || !hasNextPage {
 		slog.InfoContext(ctx, "Fetched all recent PRs", "count", len(allPRs))
-		f.cache.Set(cacheKey, allPRs)
+		if cacheErr := cache.SetAsyncTTL(ctx, cacheKey, allPRs, cacheTTL); cacheErr != nil {
+			slog.Warn("Failed to cache project PRs", "key", cacheKey, "error", cacheErr)
+		}
 		return allPRs, nil
 	}
 
 	endCursor, ok := pageInfo["endCursor"].(string)
 	if !ok {
 		slog.InfoContext(ctx, "Fetched first batch of PRs", "count", len(allPRs))
-		f.cache.Set(cacheKey, allPRs)
+		if cacheErr := cache.SetAsyncTTL(ctx, cacheKey, allPRs, cacheTTL); cacheErr != nil {
+			slog.Warn("Failed to cache project PRs", "key", cacheKey, "error", cacheErr)
+		}
 		return allPRs, nil
 	}
 
@@ -601,7 +642,9 @@ func (f *Finder) recentPRsInProject(ctx context.Context, owner, repo string) ([]
 	result2, err := f.client.MakeGraphQLRequest(ctx, query2, variables)
 	if err != nil {
 		slog.WarnContext(ctx, "Failed to fetch second batch of PRs", "error", err)
-		f.cache.Set(cacheKey, allPRs)
+		if cacheErr := cache.SetAsyncTTL(ctx, cacheKey, allPRs, cacheTTL); cacheErr != nil {
+			slog.Warn("Failed to cache project PRs", "key", cacheKey, "error", cacheErr)
+		}
 		return allPRs, nil
 	}
 
@@ -611,7 +654,9 @@ func (f *Finder) recentPRsInProject(ctx context.Context, owner, repo string) ([]
 	}
 
 	slog.InfoContext(ctx, "Fetched recent PRs with pagination", "total_count", len(allPRs))
-	f.cache.Set(cacheKey, allPRs)
+	if cacheErr := cache.SetAsyncTTL(ctx, cacheKey, allPRs, cacheTTL); cacheErr != nil {
+		slog.Warn("Failed to cache project PRs", "key", cacheKey, "error", cacheErr)
+	}
 	return allPRs, nil
 }
 
@@ -720,47 +765,24 @@ func parsePRNode(pr map[string]any) *types.PRInfo {
 		slog.Debug("No mergedBy found in PR node", "pr", prInfo.Number, "raw_mergedBy", pr["mergedBy"])
 	}
 
-	prInfo.Reviewers = extractReviewers(pr)
+	// Extract unique reviewer logins
+	if reviews, ok := mapValue(pr, "reviews"); ok {
+		if reviewNodes, ok := sliceNodes(reviews); ok {
+			seen := make(map[string]bool)
+			for _, reviewNode := range reviewNodes {
+				if review, ok := reviewNode.(map[string]any); ok {
+					if author, ok := mapValue(review, "author"); ok {
+						if login, ok := stringValue(author, "login"); ok && !seen[login] {
+							seen[login] = true
+							prInfo.Reviewers = append(prInfo.Reviewers, login)
+						}
+					}
+				}
+			}
+		}
+	}
 
 	slog.Debug("Parsed PR node", "pr", prInfo.Number, "author", prInfo.Author, "mergedBy", prInfo.MergedBy, "reviewers", prInfo.Reviewers)
 
 	return prInfo
-}
-
-// extractReviewers extracts unique reviewer logins from a PR node.
-func extractReviewers(pr map[string]any) []string {
-	var reviewers []string
-	seen := make(map[string]bool)
-
-	reviews, ok := mapValue(pr, "reviews")
-	if !ok {
-		return reviewers
-	}
-
-	reviewNodes, ok := sliceNodes(reviews)
-	if !ok {
-		return reviewers
-	}
-
-	for _, reviewNode := range reviewNodes {
-		review, ok := reviewNode.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		author, ok := mapValue(review, "author")
-		if !ok {
-			continue
-		}
-
-		login, ok := stringValue(author, "login")
-		if !ok || seen[login] {
-			continue
-		}
-
-		seen[login] = true
-		reviewers = append(reviewers, login)
-	}
-
-	return reviewers
 }

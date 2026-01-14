@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/codeGROOVE-dev/best-reviewer/pkg/activity"
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/types"
 )
 
@@ -18,6 +20,7 @@ type candidateWeight struct {
 	username        string
 	weight          int
 	workloadPenalty int
+	timingBoost     int
 	finalScore      int
 }
 
@@ -284,7 +287,24 @@ func (f *Finder) findReviewersOptimized(ctx context.Context, pr *types.PullReque
 			"weight", validCandidates[i].weight, "final_score", validCandidates[i].finalScore)
 	}
 
-	// Re-sort by final score (with workload penalties applied to top 10)
+	// Apply timing boost based on activity during current UTC time bucket
+	timelines := f.activityManager.Timelines(ctx, pr.Owner, topUsernames)
+	currentHour := time.Now().UTC().Hour()
+	for i := range workloadCheckLimit {
+		username := validCandidates[i].username
+		timeline := timelines[username]
+		boost := activity.TimingBoost(timeline, validCandidates[i].finalScore)
+		if boost > 0 {
+			validCandidates[i].timingBoost = boost
+			validCandidates[i].finalScore += boost
+			validCandidates[i].sourceScores["timing"] = boost
+			slog.Info("Applied timing boost",
+				"username", username, "boost", boost,
+				"bucket", currentHour/3, "final_score", validCandidates[i].finalScore)
+		}
+	}
+
+	// Re-sort by final score (with workload penalties and timing boost applied)
 	sort.Slice(validCandidates, func(i, j int) bool {
 		return validCandidates[i].finalScore > validCandidates[j].finalScore
 	})
@@ -300,7 +320,8 @@ func (f *Finder) findReviewersOptimized(ctx context.Context, pr *types.PullReque
 		}
 		slog.Info("Scored candidate",
 			"username", c.username, "weight", c.weight,
-			"penalty", c.workloadPenalty, "final_score", c.finalScore,
+			"penalty", c.workloadPenalty, "timing_boost", c.timingBoost,
+			"final_score", c.finalScore,
 			"sources", strings.Join(sourceList, ","))
 	}
 
@@ -311,7 +332,7 @@ func (f *Finder) findReviewersOptimized(ctx context.Context, pr *types.PullReque
 			break
 		}
 
-		// Build score breakdown string with workload penalty
+		// Build score breakdown string with workload penalty and timing boost
 		var scoreBreakdown []string
 		for source, score := range c.sourceScores {
 			scoreBreakdown = append(scoreBreakdown, fmt.Sprintf("%s:+%d", source, score))
@@ -322,9 +343,17 @@ func (f *Finder) findReviewersOptimized(ctx context.Context, pr *types.PullReque
 		sort.Strings(scoreBreakdown) // Sort for consistent display
 		method := strings.Join(scoreBreakdown, ", ")
 
+		// Copy source scores and add workload penalty
+		scores := make(map[string]int, len(c.sourceScores)+1)
+		maps.Copy(scores, c.sourceScores)
+		if c.workloadPenalty > 0 {
+			scores["workload"] = -c.workloadPenalty
+		}
+
 		reviewers = append(reviewers, types.ReviewerCandidate{
 			Username:        c.username,
 			SelectionMethod: method,
+			SourceScores:    scores,
 			ContextScore:    c.finalScore,
 		})
 	}

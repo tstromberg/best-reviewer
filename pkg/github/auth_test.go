@@ -181,7 +181,7 @@ func TestNewPersonalTokenClient_WithValidToken(t *testing.T) {
 	// Use a valid token format
 	validToken := "ghp_" + strings.Repeat("a", 36)
 
-	client, err := newPersonalTokenClient(ctx, validToken, 30*time.Second, time.Hour, "")
+	client, err := newPersonalTokenClient(ctx, validToken, 30*time.Second, time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -196,29 +196,6 @@ func TestNewPersonalTokenClient_WithValidToken(t *testing.T) {
 
 	if client.isAppAuth {
 		t.Error("expected isAppAuth to be false for personal token")
-	}
-}
-
-func TestNewPersonalTokenClient_InvalidCacheDir(t *testing.T) {
-	ctx := context.Background()
-
-	// Use a valid token format
-	validToken := "ghp_" + strings.Repeat("a", 36)
-
-	// Use an invalid cache directory (file instead of directory)
-	tmpFile := filepath.Join(t.TempDir(), "not-a-directory")
-	if err := os.WriteFile(tmpFile, []byte("test"), 0o644); err != nil {
-		t.Fatalf("failed to create test file: %v", err)
-	}
-
-	// Should fail with invalid cache dir (no graceful degradation)
-	_, err := newPersonalTokenClient(ctx, validToken, 30*time.Second, time.Hour, tmpFile)
-	if err == nil {
-		t.Fatal("expected error for invalid cache directory")
-	}
-
-	if !strings.Contains(err.Error(), "failed to create cache") {
-		t.Errorf("expected error about cache creation, got: %v", err)
 	}
 }
 
@@ -717,43 +694,10 @@ func TestNew_WithAppAuth(t *testing.T) {
 	// Just checking the branch is covered - error expected due to missing app ID
 }
 
-func TestNewPersonalTokenClient_WithCacheDir(t *testing.T) {
-	ctx := context.Background()
-	tmpDir := t.TempDir()
-
-	// Use a valid token format
-	validToken := "ghp_" + strings.Repeat("a", 36)
-
-	client, err := newPersonalTokenClient(ctx, validToken, 30*time.Second, time.Hour, tmpDir)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if client == nil {
-		t.Fatal("expected non-nil client")
-	}
-}
-
-func TestCreateAppAuthClient_InvalidCacheDir(t *testing.T) {
-	// Create a file to use as invalid cache dir
-	tmpFile := filepath.Join(t.TempDir(), "not-a-directory")
-	if err := os.WriteFile(tmpFile, []byte("test"), 0o644); err != nil {
-		t.Fatalf("failed to create temp file: %v", err)
-	}
-
-	_, err := createAppAuthClient("123456", "", testRSAPrivateKey, "jwt-token", 30*time.Second, time.Hour, tmpFile)
-	if err == nil {
-		t.Fatal("expected error for invalid cache directory")
-	}
-	if !strings.Contains(err.Error(), "failed to create cache") {
-		t.Errorf("expected 'failed to create cache' error, got: %v", err)
-	}
-}
-
 func TestCreateAppAuthClient_Success(t *testing.T) {
-	tmpDir := t.TempDir()
+	ctx := context.Background()
 
-	client, err := createAppAuthClient("123456", "", testRSAPrivateKey, "jwt-token", 30*time.Second, time.Hour, tmpDir)
+	client, err := createAppAuthClient(ctx, "123456", "", testRSAPrivateKey, "jwt-token", 30*time.Second, time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

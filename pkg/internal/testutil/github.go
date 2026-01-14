@@ -5,11 +5,15 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
+	"github.com/codeGROOVE-dev/best-reviewer/pkg/activity"
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/github"
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/types"
+	"github.com/codeGROOVE-dev/fido"
+	"github.com/codeGROOVE-dev/fido/pkg/store/localfs"
 )
 
 // MockGitHubClient implements github.API for testing.
@@ -26,6 +30,8 @@ type MockGitHubClient struct {
 	isUserAccount     map[string]bool
 	graphQLResponses  map[string]map[string]any
 	batchPRCounts     map[string]map[string]int
+	activityTimelines map[string]*activity.Timeline
+	cache             *fido.TieredCache[string, any]
 	currentOrg        string
 	addReviewersCalls []AddReviewersCall
 	installations     []string
@@ -42,6 +48,67 @@ type AddReviewersCall struct {
 
 // NewMockGitHubClient creates a new MockGitHubClient.
 func NewMockGitHubClient() *MockGitHubClient {
+	// Create a temp directory for test cache
+	tmpDir, err := os.MkdirTemp("", "best-reviewer-test-*")
+	if err != nil {
+		// Fall back to no cache if temp dir creation fails
+		return &MockGitHubClient{
+			pullRequests:      make(map[string]*types.PullRequest),
+			changedFiles:      make(map[string][]types.ChangedFile),
+			filePatches:       make(map[string]string),
+			collaborators:     make(map[string][]string),
+			botUsers:          make(map[string]bool),
+			writeAccess:       make(map[string]bool),
+			openPRCounts:      make(map[string]int),
+			batchPRCounts:     make(map[string]map[string]int),
+			graphQLResponses:  make(map[string]map[string]any),
+			isUserAccount:     make(map[string]bool),
+			activityTimelines: make(map[string]*activity.Timeline),
+			addReviewersCalls: []AddReviewersCall{},
+			errors:            make(map[string]error),
+		}
+	}
+
+	// Create a localfs store for testing
+	store, err := localfs.New[string, any]("mock-test", tmpDir)
+	if err != nil {
+		// Fall back to no cache if store creation fails
+		return &MockGitHubClient{
+			pullRequests:      make(map[string]*types.PullRequest),
+			changedFiles:      make(map[string][]types.ChangedFile),
+			filePatches:       make(map[string]string),
+			collaborators:     make(map[string][]string),
+			botUsers:          make(map[string]bool),
+			writeAccess:       make(map[string]bool),
+			openPRCounts:      make(map[string]int),
+			batchPRCounts:     make(map[string]map[string]int),
+			graphQLResponses:  make(map[string]map[string]any),
+			isUserAccount:     make(map[string]bool),
+			activityTimelines: make(map[string]*activity.Timeline),
+			addReviewersCalls: []AddReviewersCall{},
+			errors:            make(map[string]error),
+		}
+	}
+	cache, err := fido.NewTiered(store, fido.TTL(time.Hour))
+	if err != nil {
+		// Fall back to no cache if tiered cache creation fails
+		return &MockGitHubClient{
+			pullRequests:      make(map[string]*types.PullRequest),
+			changedFiles:      make(map[string][]types.ChangedFile),
+			filePatches:       make(map[string]string),
+			collaborators:     make(map[string][]string),
+			botUsers:          make(map[string]bool),
+			writeAccess:       make(map[string]bool),
+			openPRCounts:      make(map[string]int),
+			batchPRCounts:     make(map[string]map[string]int),
+			graphQLResponses:  make(map[string]map[string]any),
+			isUserAccount:     make(map[string]bool),
+			activityTimelines: make(map[string]*activity.Timeline),
+			addReviewersCalls: []AddReviewersCall{},
+			errors:            make(map[string]error),
+		}
+	}
+
 	return &MockGitHubClient{
 		pullRequests:      make(map[string]*types.PullRequest),
 		changedFiles:      make(map[string][]types.ChangedFile),
@@ -53,6 +120,8 @@ func NewMockGitHubClient() *MockGitHubClient {
 		batchPRCounts:     make(map[string]map[string]int),
 		graphQLResponses:  make(map[string]map[string]any),
 		isUserAccount:     make(map[string]bool),
+		activityTimelines: make(map[string]*activity.Timeline),
+		cache:             cache,
 		addReviewersCalls: []AddReviewersCall{},
 		errors:            make(map[string]error),
 	}
@@ -322,6 +391,28 @@ func (m *MockGitHubClient) ListAppInstallations(ctx context.Context) ([]string, 
 	return m.installations, nil
 }
 
+// FetchTimeline returns a configured activity timeline for a user within an org.
+func (m *MockGitHubClient) FetchTimeline(_ context.Context, _, username string) (*activity.Timeline, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if err := m.errors[fmt.Sprintf("FetchTimeline:%s", username)]; err != nil {
+		return nil, err
+	}
+
+	timeline, ok := m.activityTimelines[username]
+	if !ok {
+		// Return empty timeline instead of nil for unknown users
+		return &activity.Timeline{Username: username}, nil
+	}
+	return timeline, nil
+}
+
+// Cache returns the mock tiered cache.
+func (m *MockGitHubClient) Cache() *fido.TieredCache[string, any] {
+	return m.cache
+}
+
 // Configuration methods for testing.
 
 // SetPullRequest configures a pull request response.
@@ -441,6 +532,14 @@ func (m *MockGitHubClient) SetInstallations(installations []string) {
 	defer m.mu.Unlock()
 
 	m.installations = installations
+}
+
+// SetActivityTimeline configures an activity timeline for a user.
+func (m *MockGitHubClient) SetActivityTimeline(username string, timeline *activity.Timeline) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.activityTimelines[username] = timeline
 }
 
 // AddReviewersCallsCount returns the number of times AddReviewers was called.

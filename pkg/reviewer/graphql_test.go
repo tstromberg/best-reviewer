@@ -183,58 +183,81 @@ func TestFinder_parseBlameResults_NoBlameField(t *testing.T) {
 	}
 }
 
-func TestExtractReviewers_NoReviews(t *testing.T) {
-	pr := map[string]any{}
-	reviewers := extractReviewers(pr)
+func TestParsePRNode_NoReviews(t *testing.T) {
+	pr := map[string]any{
+		"number": float64(1),
+		"merged": true,
+	}
+	prInfo := parsePRNode(pr)
 
-	if len(reviewers) != 0 {
-		t.Errorf("expected 0 reviewers, got %d", len(reviewers))
+	if prInfo == nil {
+		t.Fatal("expected non-nil PR")
+	}
+	if len(prInfo.Reviewers) != 0 {
+		t.Errorf("expected 0 reviewers, got %d", len(prInfo.Reviewers))
 	}
 }
 
-func TestExtractReviewers_NoNodes(t *testing.T) {
+func TestParsePRNode_ReviewsNoNodes(t *testing.T) {
 	pr := map[string]any{
+		"number":  float64(1),
+		"merged":  true,
 		"reviews": map[string]any{},
 	}
-	reviewers := extractReviewers(pr)
+	prInfo := parsePRNode(pr)
 
-	if len(reviewers) != 0 {
-		t.Errorf("expected 0 reviewers, got %d", len(reviewers))
+	if prInfo == nil {
+		t.Fatal("expected non-nil PR")
+	}
+	if len(prInfo.Reviewers) != 0 {
+		t.Errorf("expected 0 reviewers, got %d", len(prInfo.Reviewers))
 	}
 }
 
-func TestExtractReviewers_InvalidNode(t *testing.T) {
+func TestParsePRNode_InvalidReviewNode(t *testing.T) {
 	pr := map[string]any{
+		"number": float64(1),
+		"merged": true,
 		"reviews": map[string]any{
 			"nodes": []any{
 				"not a map",
 			},
 		},
 	}
-	reviewers := extractReviewers(pr)
+	prInfo := parsePRNode(pr)
 
-	if len(reviewers) != 0 {
-		t.Errorf("expected 0 reviewers, got %d", len(reviewers))
+	if prInfo == nil {
+		t.Fatal("expected non-nil PR")
+	}
+	if len(prInfo.Reviewers) != 0 {
+		t.Errorf("expected 0 reviewers, got %d", len(prInfo.Reviewers))
 	}
 }
 
-func TestExtractReviewers_NoAuthor(t *testing.T) {
+func TestParsePRNode_ReviewNoAuthor(t *testing.T) {
 	pr := map[string]any{
+		"number": float64(1),
+		"merged": true,
 		"reviews": map[string]any{
 			"nodes": []any{
 				map[string]any{},
 			},
 		},
 	}
-	reviewers := extractReviewers(pr)
+	prInfo := parsePRNode(pr)
 
-	if len(reviewers) != 0 {
-		t.Errorf("expected 0 reviewers, got %d", len(reviewers))
+	if prInfo == nil {
+		t.Fatal("expected non-nil PR")
+	}
+	if len(prInfo.Reviewers) != 0 {
+		t.Errorf("expected 0 reviewers, got %d", len(prInfo.Reviewers))
 	}
 }
 
-func TestExtractReviewers_DuplicateReviewers(t *testing.T) {
+func TestParsePRNode_DuplicateReviewers(t *testing.T) {
 	pr := map[string]any{
+		"number": float64(1),
+		"merged": true,
 		"reviews": map[string]any{
 			"nodes": []any{
 				map[string]any{
@@ -250,13 +273,16 @@ func TestExtractReviewers_DuplicateReviewers(t *testing.T) {
 			},
 		},
 	}
-	reviewers := extractReviewers(pr)
+	prInfo := parsePRNode(pr)
 
-	if len(reviewers) != 1 {
-		t.Errorf("expected 1 reviewer (deduplicated), got %d", len(reviewers))
+	if prInfo == nil {
+		t.Fatal("expected non-nil PR")
 	}
-	if reviewers[0] != "alice" {
-		t.Errorf("expected reviewer 'alice', got %q", reviewers[0])
+	if len(prInfo.Reviewers) != 1 {
+		t.Errorf("expected 1 reviewer (deduplicated), got %d", len(prInfo.Reviewers))
+	}
+	if prInfo.Reviewers[0] != "alice" {
+		t.Errorf("expected reviewer 'alice', got %q", prInfo.Reviewers[0])
 	}
 }
 
@@ -434,7 +460,7 @@ func TestFinder_recentCommitsInDirectory_CacheTypeAssertionFails(t *testing.T) {
 
 	// Set invalid cached value (wrong type)
 	cacheKey := "commits-dir:owner/repo:src:10"
-	finder.cache.Set(cacheKey, "invalid-type") // String instead of []types.PRInfo
+	_ = client.Cache().SetAsyncTTL(ctx, cacheKey, "invalid-type", time.Hour) //nolint:errcheck // Testing cache type assertion failure
 
 	// Mock a successful GraphQL response
 	response := map[string]any{
@@ -527,7 +553,7 @@ func TestFinder_recentPRsInProject_CacheTypeAssertionFails(t *testing.T) {
 
 	// Set invalid cached value (wrong type)
 	cacheKey := "prs-project:owner/repo"
-	finder.cache.Set(cacheKey, 12345) // Int instead of []types.PRInfo
+	_ = client.Cache().SetAsyncTTL(ctx, cacheKey, 12345, time.Hour) //nolint:errcheck // Testing cache type assertion failure
 
 	// Mock a successful GraphQL response
 	response := map[string]any{
