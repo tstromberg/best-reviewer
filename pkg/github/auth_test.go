@@ -210,18 +210,14 @@ func TestNewPersonalTokenClient_InvalidCacheDir(t *testing.T) {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	// Should succeed even with invalid cache dir (falls back to memory cache)
-	client, err := newPersonalTokenClient(ctx, validToken, 30*time.Second, time.Hour, tmpFile)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	// Should fail with invalid cache dir (no graceful degradation)
+	_, err := newPersonalTokenClient(ctx, validToken, 30*time.Second, time.Hour, tmpFile)
+	if err == nil {
+		t.Fatal("expected error for invalid cache directory")
 	}
 
-	if client == nil {
-		t.Fatal("expected non-nil client")
-	}
-
-	if client.cache == nil {
-		t.Error("expected non-nil cache (should fallback to memory cache)")
+	if !strings.Contains(err.Error(), "failed to create cache") {
+		t.Errorf("expected error about cache creation, got: %v", err)
 	}
 }
 

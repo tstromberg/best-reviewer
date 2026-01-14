@@ -20,9 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codeGROOVE-dev/best-reviewer/pkg/cache"
 	"github.com/codeGROOVE-dev/gsm"
-
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -99,7 +97,7 @@ func newAppAuthClient(ctx context.Context, appID, appKeyPath string, httpTimeout
 	slog.Info("Successfully generated JWT for GitHub App", "component", "auth")
 
 	// Create and configure client
-	return createAppAuthClient(creds.appID, creds.keyPath, creds.privateKeyContent, jwtToken, httpTimeout, cacheTTL, cacheDir), nil
+	return createAppAuthClient(creds.appID, creds.keyPath, creds.privateKeyContent, jwtToken, httpTimeout, cacheTTL, cacheDir)
 }
 
 // newPersonalTokenClient creates a GitHub client with personal token authentication.
@@ -120,21 +118,18 @@ func newPersonalTokenClient(ctx context.Context, token string, httpTimeout time.
 
 	slog.Info("Using personal access token authentication", "component", "auth")
 
-	// Create disk cache if cacheDir is provided, otherwise fallback to memory-only
 	if cacheDir != "" {
-		slog.Info("Attempting to create disk cache", "cache_dir", cacheDir)
+		slog.Info("Using disk cache", "cache_dir", cacheDir)
 	}
-	c, err := cache.NewDiskCache(cacheTTL, cacheDir)
+
+	cache, err := newCache(cacheTTL, cacheDir)
 	if err != nil {
-		slog.Warn("Failed to create disk cache, using memory-only", "error", err)
-		c = &cache.DiskCache{Cache: cache.New(cacheTTL)}
-	} else if cacheDir != "" {
-		slog.Info("Successfully created disk cache", "cache_dir", cacheDir)
+		return nil, fmt.Errorf("failed to create cache: %w", err)
 	}
 
 	return &Client{
 		httpClient: &http.Client{Timeout: httpTimeout},
-		cache:      c,
+		cache:      cache,
 		userCache:  NewUserCache(),
 		token:      token,
 		isAppAuth:  false,
@@ -288,20 +283,19 @@ func validateToken(token string) error {
 }
 
 // createAppAuthClient creates a configured GitHub App authentication client.
-func createAppAuthClient(appID, keyPath string, privateKeyContent []byte, jwtToken string, httpTimeout time.Duration, cacheTTL time.Duration, cacheDir string) *Client {
-	// Create disk cache if cacheDir is provided, otherwise fallback to memory-only
-	c, err := cache.NewDiskCache(cacheTTL, cacheDir)
-	if err != nil {
-		slog.Warn("Failed to create disk cache, using memory-only", "error", err)
-		c = &cache.DiskCache{Cache: cache.New(cacheTTL)}
-	}
+func createAppAuthClient(appID, keyPath string, privateKeyContent []byte, jwtToken string, httpTimeout time.Duration, cacheTTL time.Duration, cacheDir string) (*Client, error) {
 	if cacheDir != "" {
 		slog.Info("Using disk cache", "cache_dir", cacheDir)
 	}
 
+	cache, err := newCache(cacheTTL, cacheDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cache: %w", err)
+	}
+
 	client := &Client{
 		httpClient:         &http.Client{Timeout: httpTimeout},
-		cache:              c,
+		cache:              cache,
 		userCache:          NewUserCache(),
 		token:              jwtToken,
 		isAppAuth:          true,
@@ -312,14 +306,10 @@ func createAppAuthClient(appID, keyPath string, privateKeyContent []byte, jwtTok
 		installationExpiry: make(map[string]time.Time),
 		installationIDs:    make(map[string]int),
 		installationTypes:  make(map[string]string),
+		privateKeyContent:  privateKeyContent,
 	}
 
-	// Store private key content if using direct content approach
-	if len(privateKeyContent) > 0 {
-		client.privateKeyContent = privateKeyContent
-	}
-
-	return client
+	return client, nil
 }
 
 // refreshJWTIfNeeded refreshes the JWT token if it's close to expiry.
@@ -514,6 +504,7 @@ func (c *Client) ListAppInstallations(ctx context.Context) ([]string, error) {
 	}
 
 	var orgs []string
+	c.tokenMutex.Lock()
 	for _, installation := range installations {
 		// Include both organization and user accounts
 		orgs = append(orgs, installation.Account.Login)
@@ -527,6 +518,7 @@ func (c *Client) ListAppInstallations(ctx context.Context) ([]string, error) {
 			slog.Info("Found installation for user", "component", "app", "user", installation.Account.Login, "installation_id", installation.ID)
 		}
 	}
+	c.tokenMutex.Unlock()
 
 	slog.Info("Found installations (organizations and users)", "component", "app", "count", len(orgs))
 	return orgs, nil

@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/codeGROOVE-dev/best-reviewer/pkg/cache"
 )
 
 func TestNewUserCache(t *testing.T) {
@@ -18,8 +16,10 @@ func TestNewUserCache(t *testing.T) {
 		t.Fatal("expected non-nil UserCache")
 	}
 
-	if uc.users == nil {
-		t.Error("expected users map to be initialized")
+	// Verify it's usable by doing a Get (should return not found)
+	_, ok := uc.Get("nonexistent")
+	if ok {
+		t.Error("expected Get on empty cache to return not found")
 	}
 }
 
@@ -258,7 +258,8 @@ func TestClient_CacheUserTypeFromGraphQL_EmptyUsername(t *testing.T) {
 	// Should not cache with empty username
 	c.CacheUserTypeFromGraphQL(ctx, "", "User")
 
-	if len(c.userCache.users) != 0 {
+	// Verify nothing was cached by checking that Len returns 0
+	if c.userCache.Len() != 0 {
 		t.Error("expected no users to be cached for empty username")
 	}
 }
@@ -470,19 +471,14 @@ func TestClient_Collaborators_Forbidden(t *testing.T) {
 		},
 	}
 
-	diskCache, err := cache.NewDiskCache(time.Hour, t.TempDir())
-	if err != nil {
-		t.Fatalf("failed to create cache: %v", err)
-	}
-
 	c := &Client{
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
-		cache:      diskCache,
+		cache:      mustNewCache(t),
 	}
 
 	ctx := context.Background()
-	_, err = c.Collaborators(ctx, "owner", "repo")
+	_, err := c.Collaborators(ctx, "owner", "repo")
 
 	if err == nil {
 		t.Error("expected error for 403 response")
@@ -494,7 +490,10 @@ func TestClient_Collaborators_Forbidden(t *testing.T) {
 
 	// Verify that permission cache key was set
 	permCacheKey := makeCacheKey("collaborators-permission", "owner", "repo")
-	cached, found := c.cache.Get(permCacheKey)
+	cached, found, err := c.cache.Get(ctx, permCacheKey)
+	if err != nil {
+		t.Fatalf("failed to get cache: %v", err)
+	}
 	if !found {
 		t.Error("expected permission cache key to be set on 403")
 	}

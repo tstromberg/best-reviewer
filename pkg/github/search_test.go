@@ -23,7 +23,7 @@ func TestClient_searchPRCount_Success(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -52,7 +52,7 @@ func TestClient_searchPRCount_ZeroResults(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -94,7 +94,7 @@ func TestClient_OpenPRCount_WithCache(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -156,7 +156,7 @@ func TestClient_BatchOpenPRCount_MultipleUsers(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,

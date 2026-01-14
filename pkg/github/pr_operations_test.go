@@ -9,9 +9,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
-
-	"github.com/codeGROOVE-dev/best-reviewer/pkg/cache"
 )
 
 func TestClient_PullRequest_Success(t *testing.T) {
@@ -58,7 +55,7 @@ func TestClient_PullRequest_Success(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -125,7 +122,7 @@ func TestClient_ChangedFiles_Success(t *testing.T) {
 	defer server.Close()
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: server.Client(),
 		token:      "test-token",
 		isAppAuth:  false,
@@ -175,7 +172,7 @@ func TestClient_Collaborators_Success(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -211,7 +208,7 @@ func TestClient_Collaborators_PermissionDenied(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -244,7 +241,7 @@ func TestClient_doRequest_WithRetry(t *testing.T) {
 	defer server.Close()
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: server.Client(),
 		token:      "test-token",
 		isAppAuth:  false,
@@ -345,7 +342,7 @@ func TestClient_OpenPullRequests_Success(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -382,7 +379,7 @@ func TestClient_OpenPullRequests_NonOKStatus(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -411,7 +408,7 @@ func TestClient_OpenPullRequests_InvalidJSON(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -436,7 +433,7 @@ func TestClient_OpenPullRequests_EmptyList(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -477,7 +474,7 @@ func TestClient_AddReviewers_Success(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -501,7 +498,7 @@ func TestClient_AddReviewers_Error(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -515,7 +512,7 @@ func TestClient_AddReviewers_Error(t *testing.T) {
 
 func TestClient_AddReviewers_EmptyList(t *testing.T) {
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -551,7 +548,7 @@ func TestClient_MakeGraphQLRequest_WithServer(t *testing.T) {
 	defer server.Close()
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: server.Client(),
 		token:      "test-token",
 		isAppAuth:  false,
@@ -658,7 +655,7 @@ func TestClient_OpenPullRequestsForOrg_Success(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -695,7 +692,7 @@ func TestClient_FilePatch_Success(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -735,7 +732,7 @@ func TestClient_FilePatch_FileNotFound(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -764,7 +761,7 @@ func TestClient_PullRequest_NotFound(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -796,7 +793,7 @@ func TestClient_PullRequest_InvalidJSON(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -860,7 +857,7 @@ func TestClient_PullRequest_InvalidDates(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -1008,19 +1005,14 @@ func TestClient_ChangedFiles_InvalidJSON(t *testing.T) {
 		},
 	}
 
-	diskCache, err := cache.NewDiskCache(time.Hour, t.TempDir())
-	if err != nil {
-		t.Fatalf("failed to create cache: %v", err)
-	}
-
 	c := &Client{
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
-		cache:      diskCache,
+		cache:      mustNewCache(t),
 	}
 
 	ctx := context.Background()
-	_, err = c.ChangedFiles(ctx, "owner", "repo", 123)
+	_, err := c.ChangedFiles(ctx, "owner", "repo", 123)
 
 	if err == nil {
 		t.Error("expected error for invalid JSON")
@@ -1048,15 +1040,10 @@ func TestClient_ChangedFiles_CacheHit(t *testing.T) {
 		},
 	}
 
-	diskCache, err := cache.NewDiskCache(time.Hour, t.TempDir())
-	if err != nil {
-		t.Fatalf("failed to create cache: %v", err)
-	}
-
 	c := &Client{
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
-		cache:      diskCache,
+		cache:      mustNewCache(t),
 	}
 
 	ctx := context.Background()

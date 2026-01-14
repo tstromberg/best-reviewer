@@ -183,14 +183,6 @@ func TestValidateToken(t *testing.T) {
 	}
 }
 
-func TestSanitizeURLForLogging(t *testing.T) {
-	// Test that function exists and doesn't panic
-	result := sanitizeURLForLogging("https://api.github.com/repos/owner/repo")
-	if result == "" {
-		t.Error("expected non-empty result")
-	}
-}
-
 func TestRetryWithBackoff_Success(t *testing.T) {
 	ctx := context.Background()
 	callCount := 0

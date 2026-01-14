@@ -40,7 +40,7 @@ func TestClient_MakeGraphQLRequest_HappyPath(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -71,7 +71,7 @@ func TestClient_MakeGraphQLRequest_HappyPath(t *testing.T) {
 
 func TestClient_MakeGraphQLRequest_InvalidVariables(t *testing.T) {
 	c := &Client{
-		cache:     mustNewDiskCache(t),
+		cache:     mustNewCache(t),
 		token:     "test-token",
 		isAppAuth: false,
 	}
@@ -97,7 +97,7 @@ func TestClient_MakeGraphQLRequest_NonOKStatus(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -131,7 +131,7 @@ func TestClient_MakeGraphQLRequest_GraphQLErrors(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -160,7 +160,7 @@ func TestClient_MakeGraphQLRequest_InvalidJSONResponse(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -182,7 +182,7 @@ func TestClient_MakeGraphQLRequest_InvalidJSONResponse(t *testing.T) {
 func TestClient_MakeRequest_HappyPath(t *testing.T) {
 	mockTransport := &mockRoundTripper{}
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -221,7 +221,7 @@ func TestClient_MakeRequest_HappyPath(t *testing.T) {
 func TestClient_doRequest_Success(t *testing.T) {
 	mockTransport := &mockRoundTripper{}
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -253,7 +253,7 @@ func TestClient_doRequest_Success(t *testing.T) {
 func TestClient_doRequest_RateLimitRetry(t *testing.T) {
 	mockTransport := &mockRoundTripper{}
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,

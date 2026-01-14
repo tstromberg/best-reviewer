@@ -11,25 +11,82 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/codeGROOVE-dev/best-reviewer/pkg/cache"
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/types"
+	"github.com/codeGROOVE-dev/fido"
 )
 
 // User-related constants.
 const (
-	prStaleDaysThreshold   = 90               // PRs older than this are considered stale
-	prCountCacheTTL        = 6 * time.Hour    // PR count for workload balancing (default)
-	prCountFailureCacheTTL = 10 * time.Minute // Cache failures to avoid repeated API calls
+	prStaleDaysThreshold   = 90                 // PRs older than this are considered stale
+	prCountCacheTTL        = 6 * time.Hour      // PR count for workload balancing (default)
+	prCountFailureCacheTTL = 10 * time.Minute   // Cache failures to avoid repeated API calls
+	collaboratorsCacheTTL  = 6 * time.Hour      // Collaborators list cache TTL
+	prDetailsCacheTTL      = 3 * 24 * time.Hour // PR details cache TTL (validated by updated_at)
 )
 
-// UserCache provides caching for user information.
-type UserCache struct {
-	users map[string]*UserInfo
-	mu    sync.RWMutex
+// Bot detection patterns - checked against lowercase usernames.
+var botPatterns = []string{
+	"[bot]",
+	"-bot",
+	"_bot",
+	"bot-",
+	"bot_",
+	".bot",
+	"github-actions",
+	"dependabot",
+	"renovate",
+	"greenkeeper",
+	"snyk",
+	"codecov",
+	"coveralls",
+	"travis",
+	"circleci",
+	"jenkins",
+	"buildkite",
+	"semaphore",
+	"appveyor",
+	"azure-pipelines",
+	"github-classroom",
+	"imgbot",
+	"allcontributors",
+	"whitesource",
+	"mergify",
+	"sonarcloud",
+	"deepsource",
+	"codefactor",
+	"lgtm",
+	"codacy",
+	"hound",
+	"stale",
 }
+
+// Service account patterns - checked against lowercase usernames.
+var serviceAccountPatterns = []string{
+	"octo-sts",
+	"octocat",
+	"-sts",
+	"-svc",
+	"-service",
+	"-system",
+	"-automation",
+	"-ci",
+	"-cd",
+	"-deploy",
+	"-release",
+	"release-manager",
+	"-build",
+	"-test",
+	"-admin",
+	"-security",
+	"security-scanner",
+	"-compliance",
+	"compliance-checker",
+}
+
+// UserCache is a type alias for fido.Cache storing user information.
+type UserCache = fido.Cache[string, *UserInfo]
 
 // UserInfo holds cached information about a GitHub user.
 type UserInfo struct {
@@ -40,24 +97,7 @@ type UserInfo struct {
 
 // NewUserCache creates a new user cache.
 func NewUserCache() *UserCache {
-	return &UserCache{
-		users: make(map[string]*UserInfo),
-	}
-}
-
-// Get retrieves user info from cache.
-func (uc *UserCache) Get(username string) (*UserInfo, bool) {
-	uc.mu.RLock()
-	defer uc.mu.RUnlock()
-	info, ok := uc.users[username]
-	return info, ok
-}
-
-// Set stores user info in cache.
-func (uc *UserCache) Set(username string, info *UserInfo) {
-	uc.mu.Lock()
-	defer uc.mu.Unlock()
-	uc.users[username] = info
+	return fido.New[string, *UserInfo](fido.Size(4096))
 }
 
 // CacheUserTypeFromGraphQL caches user type information from GraphQL responses.
@@ -66,98 +106,41 @@ func (c *Client) CacheUserTypeFromGraphQL(ctx context.Context, username, typeNam
 		return
 	}
 
-	var isBot bool
+	var bot bool
 	switch typeName {
 	case "Bot":
-		isBot = true
+		bot = true
 	case "Organization":
-		isBot = false
+		bot = false
 	default:
-		isBot = c.IsUserBot(ctx, username)
+		bot = isUserBot(username)
 	}
 
-	info := &UserInfo{
-		IsBot:      isBot,
+	c.userCache.Set(username, &UserInfo{
+		IsBot:      bot,
 		LastUpdate: time.Now(),
-	}
-	c.userCache.Set(username, info)
+	})
 }
 
-// IsUserBot checks if a user is a bot.
+// IsUserBot checks if a user is a bot based on username patterns.
+// This method satisfies the GitHubClient interface.
 func (*Client) IsUserBot(_ context.Context, username string) bool {
+	return isUserBot(username)
+}
+
+// isUserBot is the internal implementation for bot detection.
+func isUserBot(username string) bool {
 	lower := strings.ToLower(username)
-
-	// Check for common bot patterns
-	botPatterns := []string{
-		"[bot]",
-		"-bot",
-		"_bot",
-		"bot-",
-		"bot_",
-		".bot",
-		"github-actions",
-		"dependabot",
-		"renovate",
-		"greenkeeper",
-		"snyk",
-		"codecov",
-		"coveralls",
-		"travis",
-		"circleci",
-		"jenkins",
-		"buildkite",
-		"semaphore",
-		"appveyor",
-		"azure-pipelines",
-		"github-classroom",
-		"imgbot",
-		"allcontributors",
-		"whitesource",
-		"mergify",
-		"sonarcloud",
-		"deepsource",
-		"codefactor",
-		"lgtm",
-		"codacy",
-		"hound",
-		"stale",
-	}
-
 	for _, pattern := range botPatterns {
 		if strings.Contains(lower, pattern) {
 			return true
 		}
 	}
-
-	// Check for common organization/service account patterns
-	orgPatterns := []string{
-		"octo-sts",
-		"octocat",
-		"-sts",
-		"-svc",
-		"-service",
-		"-system",
-		"-automation",
-		"-ci",
-		"-cd",
-		"-deploy",
-		"-release",
-		"release-manager",
-		"-build",
-		"-test",
-		"-admin",
-		"-security",
-		"security-scanner",
-		"-compliance",
-		"compliance-checker",
-	}
-
-	for _, pattern := range orgPatterns {
+	for _, pattern := range serviceAccountPatterns {
 		if strings.Contains(lower, pattern) {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -170,7 +153,9 @@ func (c *Client) HasWriteAccess(ctx context.Context, owner, repo, username strin
 	collabPermCacheKey := makeCacheKey("collaborators-permission", owner, repo)
 
 	// Check if we cached a permission error (403)
-	if cached, found := c.cache.Get(collabPermCacheKey); found {
+	if cached, found, err := c.cache.Get(ctx, collabPermCacheKey); err != nil {
+		slog.Debug("Cache read error", "key", collabPermCacheKey, "error", err)
+	} else if found {
 		if noPermission, ok := cached.(bool); ok && noPermission {
 			// We don't have permission to check collaborators, assume everyone has access
 			return true
@@ -178,7 +163,9 @@ func (c *Client) HasWriteAccess(ctx context.Context, owner, repo, username strin
 	}
 
 	// Check if we have the collaborators list cached
-	if cached, found := c.cache.Get(collabCacheKey); found {
+	if cached, found, err := c.cache.Get(ctx, collabCacheKey); err != nil {
+		slog.Debug("Cache read error", "key", collabCacheKey, "error", err)
+	} else if found {
 		if collabs, ok := cached.([]string); ok {
 			return slices.Contains(collabs, username)
 		}
@@ -194,17 +181,20 @@ func (c *Client) HasWriteAccess(ctx context.Context, owner, repo, username strin
 func (c *Client) OpenPRCount(ctx context.Context, org, user string, cacheTTL time.Duration) (int, error) {
 	// Check cache first for successful results
 	cacheKey := makeCacheKey("pr-count", org, user)
-	cached, hitType := c.cache.Lookup(cacheKey)
-	if hitType != cache.CacheMiss {
+	if cached, found, err := c.cache.Get(ctx, cacheKey); err != nil {
+		slog.Debug("Cache read error", "key", cacheKey, "error", err)
+	} else if found {
 		if count, ok := cached.(int); ok {
-			slog.Info("User has non-stale open PRs in org", "user", user, "total", count, "org", org, "cache", hitType)
+			slog.Info("User has non-stale open PRs in org", "user", user, "total", count, "org", org, "cache", "hit")
 			return count, nil
 		}
 	}
 
 	// Check if we recently failed to get PR count for this user to avoid repeated failures
 	failureKey := makeCacheKey("pr-count-failure", org, user)
-	if _, found := c.cache.Get(failureKey); found {
+	if _, found, err := c.cache.Get(ctx, failureKey); err != nil {
+		slog.Debug("Cache read error", "key", failureKey, "error", err)
+	} else if found {
 		return 0, errors.New("recently failed to get PR count (cached failure)")
 	}
 
@@ -230,7 +220,9 @@ func (c *Client) OpenPRCount(ctx context.Context, org, user string, cacheTTL tim
 	assignedCount, err := c.searchPRCount(timeoutCtx, assignedQuery)
 	if err != nil {
 		// Cache the failure to avoid repeated attempts
-		c.cache.SetWithTTL(failureKey, true, prCountFailureCacheTTL)
+		if cacheErr := c.cache.SetAsyncTTL(ctx, failureKey, true, prCountFailureCacheTTL); cacheErr != nil {
+			slog.Warn("Failed to cache failure flag", "key", failureKey, "error", cacheErr)
+		}
 		return 0, fmt.Errorf("failed to get assigned PR count: %w", err)
 	}
 	slog.Debug("Found non-stale assigned PRs for user", "count", assignedCount, "user", user)
@@ -241,7 +233,9 @@ func (c *Client) OpenPRCount(ctx context.Context, org, user string, cacheTTL tim
 	reviewCount, err := c.searchPRCount(timeoutCtx, reviewQuery)
 	if err != nil {
 		// Cache the failure to avoid repeated attempts
-		c.cache.SetWithTTL(failureKey, true, prCountFailureCacheTTL)
+		if cacheErr := c.cache.SetAsyncTTL(ctx, failureKey, true, prCountFailureCacheTTL); cacheErr != nil {
+			slog.Warn("Failed to cache failure flag", "key", failureKey, "error", cacheErr)
+		}
 		return 0, fmt.Errorf("failed to get review-requested PR count: %w", err)
 	}
 	slog.Debug("Found non-stale review-requested PRs for user", "count", reviewCount, "user", user)
@@ -251,7 +245,9 @@ func (c *Client) OpenPRCount(ctx context.Context, org, user string, cacheTTL tim
 	slog.Info("User has non-stale open PRs in org", "user", user, "total", total, "org", org, "assigned", assignedCount, "for_review", reviewCount)
 
 	// Cache the successful result
-	c.cache.SetWithTTL(cacheKey, total, cacheTTL)
+	if err := c.cache.SetAsyncTTL(ctx, cacheKey, total, cacheTTL); err != nil {
+		slog.Warn("Failed to cache PR count", "key", cacheKey, "error", err)
+	}
 
 	return total, nil
 }
@@ -269,7 +265,9 @@ func (c *Client) BatchOpenPRCount(ctx context.Context, org string, users []strin
 	// Check cache for each user first
 	for _, user := range users {
 		cacheKey := makeCacheKey("pr-count", org, user)
-		if cached, found := c.cache.Get(cacheKey); found {
+		if cached, found, err := c.cache.Get(ctx, cacheKey); err != nil {
+			slog.Debug("Cache read error", "key", cacheKey, "error", err)
+		} else if found {
 			if count, ok := cached.(int); ok {
 				result[user] = count
 				slog.Debug("Using cached PR count", "user", user, "count", count)
@@ -342,7 +340,9 @@ func (c *Client) BatchOpenPRCount(ctx context.Context, org string, users []strin
 
 		// Cache the result
 		cacheKey := makeCacheKey("pr-count", org, user)
-		c.cache.SetWithTTL(cacheKey, total, cacheTTL)
+		if err := c.cache.SetAsyncTTL(ctx, cacheKey, total, cacheTTL); err != nil {
+			slog.Warn("Failed to cache PR count", "key", cacheKey, "error", err)
+		}
 
 		slog.Debug("Fetched PR count", "user", user, "total", total, "assigned", assignedCount, "review", reviewCount)
 	}
@@ -354,8 +354,7 @@ func (c *Client) BatchOpenPRCount(ctx context.Context, org string, users []strin
 func (c *Client) searchPRCount(ctx context.Context, query string) (int, error) {
 	encodedQuery := url.QueryEscape(query)
 	apiURL := fmt.Sprintf("https://api.github.com/search/issues?q=%s&per_page=1", encodedQuery)
-	slog.Debug("Search query", "query", query)
-	slog.Debug("Full URL", "url", apiURL)
+	slog.Debug("Executing PR search", "query", query, "url", apiURL)
 	resp, err := c.doRequest(ctx, "GET", apiURL, nil)
 	if err != nil {
 		return 0, err
@@ -390,9 +389,13 @@ func makeCacheKey(parts ...string) string {
 }
 
 // cachedPR retrieves a PR from cache if valid.
-func (c *Client) cachedPR(owner, repo string, prNumber int, expectedUpdatedAt *time.Time) (*types.PullRequest, bool) {
+func (c *Client) cachedPR(ctx context.Context, owner, repo string, prNumber int, expectedUpdatedAt *time.Time) (*types.PullRequest, bool) {
 	cacheKey := makeCacheKey("pr", owner, repo, strconv.Itoa(prNumber))
-	cached, found := c.cache.Get(cacheKey)
+	cached, found, err := c.cache.Get(ctx, cacheKey)
+	if err != nil {
+		slog.Debug("Cache read error", "key", cacheKey, "error", err)
+		return nil, false
+	}
 	if !found {
 		return nil, false
 	}
@@ -413,20 +416,22 @@ func (c *Client) cachedPR(owner, repo string, prNumber int, expectedUpdatedAt *t
 }
 
 // cachePR stores a PR in cache.
-func (c *Client) cachePR(pr *types.PullRequest) {
+func (c *Client) cachePR(ctx context.Context, pr *types.PullRequest) {
 	cacheKey := makeCacheKey("pr", pr.Owner, pr.Repository, strconv.Itoa(pr.Number))
-	// Use a longer TTL for PR caching (3 days) since we validate with updated_at
-	c.cache.SetWithTTL(cacheKey, pr, 3*24*time.Hour)
+	if err := c.cache.SetAsyncTTL(ctx, cacheKey, pr, prDetailsCacheTTL); err != nil {
+		slog.Warn("Failed to cache PR", "key", cacheKey, "error", err)
+	}
 }
 
 // Collaborators returns a list of users with write access to the repository.
 // This includes direct collaborators AND organization members with write access.
 func (c *Client) Collaborators(ctx context.Context, owner, repo string) ([]string, error) {
 	cacheKey := makeCacheKey("collaborators", owner, repo)
-	cached, hitType := c.cache.Lookup(cacheKey)
-	if hitType != cache.CacheMiss {
+	if cached, found, err := c.cache.Get(ctx, cacheKey); err != nil {
+		slog.Debug("Cache read error", "key", cacheKey, "error", err)
+	} else if found {
 		if collabs, ok := cached.([]string); ok {
-			slog.InfoContext(ctx, "Fetching collaborators", "owner", owner, "repo", repo, "cache", hitType, "count", len(collabs))
+			slog.InfoContext(ctx, "Fetching collaborators", "owner", owner, "repo", repo, "cache", "hit", "count", len(collabs))
 			return collabs, nil
 		}
 	}
@@ -448,7 +453,9 @@ func (c *Client) Collaborators(ctx context.Context, owner, repo string) ([]strin
 		// If we got 403, cache this fact so HasWriteAccess knows to fail-open
 		if resp.StatusCode == http.StatusForbidden {
 			permCacheKey := makeCacheKey("collaborators-permission", owner, repo)
-			c.cache.SetWithTTL(permCacheKey, true, 6*time.Hour)
+			if cacheErr := c.cache.SetAsyncTTL(ctx, permCacheKey, true, collaboratorsCacheTTL); cacheErr != nil {
+				slog.Warn("Failed to cache permission denied flag", "key", permCacheKey, "error", cacheErr)
+			}
 		}
 		return nil, fmt.Errorf("failed to fetch collaborators (status %d)", resp.StatusCode)
 	}
@@ -469,16 +476,10 @@ func (c *Client) Collaborators(ctx context.Context, owner, repo string) ([]strin
 		}
 	}
 
-	c.cache.SetWithTTL(cacheKey, usernames, 6*time.Hour)
+	if cacheErr := c.cache.SetAsyncTTL(ctx, cacheKey, usernames, collaboratorsCacheTTL); cacheErr != nil {
+		slog.Warn("Failed to cache collaborators", "key", cacheKey, "error", cacheErr)
+	}
 	slog.InfoContext(ctx, "Fetched collaborators", "owner", owner, "repo", repo, "count", len(usernames))
 
 	return usernames, nil
-}
-
-// sanitizeURLForLogging removes sensitive query parameters from URLs.
-// Since GitHub API uses Authorization header (not query params) for tokens,
-// we only need to redact actual token/secret parameters if they exist.
-func sanitizeURLForLogging(apiURL string) string {
-	// GitHub API uses header-based auth, so query params are safe to log
-	return apiURL
 }

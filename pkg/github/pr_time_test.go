@@ -25,7 +25,7 @@ func TestClient_lastCommitTime_Success(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -65,7 +65,7 @@ func TestClient_lastReviewTime_Success(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -97,7 +97,7 @@ func TestClient_lastReviewTime_NoReviews(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -123,7 +123,7 @@ func TestClient_lastCommitTime_InvalidJSON(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -151,7 +151,7 @@ func TestClient_lastCommitTime_InvalidDateFormat(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -173,7 +173,7 @@ func TestClient_lastReviewTime_InvalidJSON(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,
@@ -200,7 +200,7 @@ func TestClient_lastReviewTime_InvalidDateInReview(t *testing.T) {
 	}
 
 	c := &Client{
-		cache:      mustNewDiskCache(t),
+		cache:      mustNewCache(t),
 		httpClient: &http.Client{Transport: mockTransport},
 		token:      "test-token",
 		isAppAuth:  false,

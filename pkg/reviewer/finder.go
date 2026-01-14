@@ -8,15 +8,15 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/codeGROOVE-dev/best-reviewer/pkg/cache"
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/github"
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/types"
+	"github.com/codeGROOVE-dev/fido"
 )
 
 // Finder finds and selects reviewers for pull requests.
 type Finder struct {
 	client       github.API
-	cache        *cache.Cache
+	cache        *fido.Cache[string, any]
 	prCountCache time.Duration
 }
 
@@ -29,7 +29,7 @@ type Config struct {
 func New(client github.API, cfg Config) *Finder {
 	return &Finder{
 		client:       client,
-		cache:        cache.New(cacheTTL),
+		cache:        fido.New[string, any](fido.TTL(cacheTTL)),
 		prCountCache: cfg.PRCountCache,
 	}
 }
@@ -77,19 +77,15 @@ func (f *Finder) Find(ctx context.Context, pr *types.PullRequest) ([]types.Revie
 
 // isValidReviewer checks if a user is a valid reviewer (only hard filters).
 func (f *Finder) isValidReviewer(ctx context.Context, pr *types.PullRequest, username string) bool {
-	// Check if user is a bot
 	if f.client.IsUserBot(ctx, username) {
 		slog.Info("Filtered (is bot)", "username", username)
 		return false
 	}
-
-	// Check write access - this is the only hard filter since they can't approve without it
-	hasAccess := f.client.HasWriteAccess(ctx, pr.Owner, pr.Repository, username)
-	if !hasAccess {
+	// Write access is the only hard filter - they can't approve without it
+	if !f.client.HasWriteAccess(ctx, pr.Owner, pr.Repository, username) {
 		slog.Info("Filtered (no write access)", "username", username)
 		return false
 	}
-
 	return true
 }
 
@@ -103,7 +99,7 @@ func (f *Finder) checkSmallTeamProject(ctx context.Context, pr *types.PullReques
 		Count   int
 	}
 
-	cacheKey := makeCacheKey("small-team", pr.Owner, pr.Repository)
+	cacheKey := "small-team:" + pr.Owner + ":" + pr.Repository
 	if cached, found := f.cache.Get(cacheKey); found {
 		if result, ok := cached.(cachedResult); ok {
 			slog.DebugContext(ctx, "Small team check cached", "count", result.Count)
@@ -145,7 +141,7 @@ func (f *Finder) checkSmallTeamProject(ctx context.Context, pr *types.PullReques
 		count = -1
 	}
 
-	f.cache.SetWithTTL(cacheKey, cachedResult{Members: result, Count: count}, 6*time.Hour)
+	f.cache.SetTTL(cacheKey, cachedResult{Members: result, Count: count}, 6*time.Hour)
 
 	return result, count, nil
 }

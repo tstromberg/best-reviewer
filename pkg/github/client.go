@@ -9,12 +9,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/codeGROOVE-dev/best-reviewer/pkg/cache"
-
+	"github.com/codeGROOVE-dev/fido"
+	"github.com/codeGROOVE-dev/fido/pkg/store/localfs"
 	"github.com/codeGROOVE-dev/retry"
 )
 
@@ -22,7 +23,7 @@ import (
 type Client struct {
 	tokenExpiry        time.Time
 	installationTokens map[string]string
-	cache              *cache.DiskCache
+	cache              *fido.TieredCache[string, any]
 	httpClient         *http.Client
 	installationExpiry map[string]time.Time
 	installationIDs    map[string]int
@@ -115,9 +116,7 @@ func (c *Client) doRequest(ctx context.Context, method, apiURL string, body any)
 		}
 	}
 
-	// Sanitize URL for logging - remove all sensitive query parameters
-	sanitizedURL := sanitizeURLForLogging(apiURL)
-	slog.Info("HTTP request", "component", "http", "method", method, "url", sanitizedURL)
+	slog.Info("HTTP request", "component", "http", "method", method, "url", apiURL)
 
 	var resp *http.Response
 	err := retryWithBackoff(ctx, fmt.Sprintf("%s %s", method, apiURL), func() error {
@@ -151,11 +150,10 @@ func (c *Client) doRequest(ctx context.Context, method, apiURL string, body any)
 
 		if c.isAppAuth {
 			req.Header.Set("Authorization", "Bearer "+authToken)
-			req.Header.Set("Accept", "application/vnd.github.v3+json")
 		} else {
 			req.Header.Set("Authorization", "token "+authToken)
-			req.Header.Set("Accept", "application/vnd.github.v3+json")
 		}
+		req.Header.Set("Accept", "application/vnd.github.v3+json")
 		if method == "PATCH" || method == "POST" || method == "PUT" {
 			req.Header.Set("Content-Type", "application/json")
 		}
@@ -169,13 +167,13 @@ func (c *Client) doRequest(ctx context.Context, method, apiURL string, body any)
 		// Check for rate limiting or server errors that should trigger retry
 		if localResp.StatusCode == http.StatusTooManyRequests {
 			drainAndCloseBody(localResp.Body)
-			slog.Warn("Rate limited - will retry with backoff", "method", method, "url", sanitizedURL, "status", 429)
+			slog.Warn("Rate limited - will retry with backoff", "method", method, "url", apiURL, "status", 429)
 			return fmt.Errorf("http %d: rate limited", localResp.StatusCode)
 		}
 
 		if localResp.StatusCode >= http.StatusInternalServerError && localResp.StatusCode < 600 {
 			drainAndCloseBody(localResp.Body)
-			slog.Warn("Server error - will retry with backoff", "method", method, "url", sanitizedURL, "status", localResp.StatusCode)
+			slog.Warn("Server error - will retry with backoff", "method", method, "url", apiURL, "status", localResp.StatusCode)
 			return fmt.Errorf("http %d: server error", localResp.StatusCode)
 		}
 
@@ -187,8 +185,7 @@ func (c *Client) doRequest(ctx context.Context, method, apiURL string, body any)
 		return nil, err
 	}
 
-	// Log response status with sanitized URL
-	slog.Info("HTTP response", "component", "http", "method", method, "url", sanitizedURL, "status", resp.StatusCode)
+	slog.Info("HTTP response", "component", "http", "method", method, "url", apiURL, "status", resp.StatusCode)
 	return resp, nil
 }
 
@@ -257,4 +254,24 @@ func (c *Client) AddReviewers(ctx context.Context, owner, repo string, prNumber 
 
 	slog.Info("Added reviewers to PR", "owner", owner, "repo", repo, "pr", prNumber, "reviewers", reviewers)
 	return nil
+}
+
+// newCache creates a fido.TieredCache with disk persistence.
+func newCache(ttl time.Duration, cacheDir string) (*fido.TieredCache[string, any], error) {
+	if cacheDir == "" {
+		var err error
+		cacheDir, err = os.UserCacheDir()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get user cache dir: %w", err)
+		}
+	}
+	store, err := localfs.New[string, any]("best-reviewer", cacheDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create disk store in %s: %w", cacheDir, err)
+	}
+	tc, err := fido.NewTiered(store, fido.TTL(ttl))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cache: %w", err)
+	}
+	return tc, nil
 }

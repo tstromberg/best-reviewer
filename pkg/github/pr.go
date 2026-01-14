@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/codeGROOVE-dev/best-reviewer/pkg/cache"
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/types"
 )
 
@@ -41,7 +40,7 @@ func (c *Client) pullRequestWithUpdatedAt(
 	ctx context.Context, owner, repo string, prNumber int, expectedUpdatedAt *time.Time,
 ) (*types.PullRequest, error) {
 	// Check cache first
-	if pr, found := c.cachedPR(owner, repo, prNumber, expectedUpdatedAt); found {
+	if pr, found := c.cachedPR(ctx, owner, repo, prNumber, expectedUpdatedAt); found {
 		return pr, nil
 	}
 
@@ -147,7 +146,7 @@ func (c *Client) pullRequestWithUpdatedAt(
 	}
 
 	// Cache the PR
-	c.cachePR(pr)
+	c.cachePR(ctx, pr)
 
 	return pr, nil
 }
@@ -310,10 +309,11 @@ func (c *Client) OpenPullRequests(ctx context.Context, owner, repo string) ([]*t
 func (c *Client) ChangedFiles(ctx context.Context, owner, repo string, prNumber int) ([]types.ChangedFile, error) {
 	// Check cache first
 	cacheKey := fmt.Sprintf("pr-files:%s/%s:%d", owner, repo, prNumber)
-	cached, hitType := c.cache.Lookup(cacheKey)
-	if hitType != cache.CacheMiss {
+	if cached, found, err := c.cache.Get(ctx, cacheKey); err != nil {
+		slog.Debug("Cache read error", "key", cacheKey, "error", err)
+	} else if found {
 		if files, ok := cached.([]types.ChangedFile); ok {
-			slog.Info("Fetching changed files for PR to determine modified files for reviewer expertise matching", "component", "api", "owner", owner, "repo", repo, "pr", prNumber, "cache", hitType)
+			slog.Info("Fetching changed files for PR to determine modified files for reviewer expertise matching", "component", "api", "owner", owner, "repo", repo, "pr", prNumber, "cache", "hit")
 			return files, nil
 		}
 	}
@@ -358,7 +358,9 @@ func (c *Client) ChangedFiles(ctx context.Context, owner, repo string, prNumber 
 	// - Current PR being examined: Don't cache (or very short TTL like 1 minute)
 	// - Historical merged PR: 28 days (immutable)
 	// For now, using 6 hours as compromise
-	c.cache.SetWithTTL(cacheKey, changedFiles, 6*time.Hour)
+	if err := c.cache.SetAsyncTTL(ctx, cacheKey, changedFiles, 6*time.Hour); err != nil {
+		slog.Warn("Failed to cache changed files", "key", cacheKey, "error", err)
+	}
 
 	return changedFiles, nil
 }
