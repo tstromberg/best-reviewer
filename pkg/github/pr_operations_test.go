@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestClient_PullRequest_Success(t *testing.T) {
@@ -1014,6 +1015,398 @@ func TestClient_ChangedFiles_InvalidJSON(t *testing.T) {
 	ctx := context.Background()
 	_, err := c.ChangedFiles(ctx, "owner", "repo", 123)
 
+	if err == nil {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
+// Mock prxClient for testing
+type mockPrxClient struct {
+	returnData any
+	returnErr  error
+}
+
+func (m *mockPrxClient) PullRequestWithReferenceTime(ctx context.Context, owner, repo string, prNumber int, referenceTime time.Time) (any, error) {
+	if m.returnErr != nil {
+		return nil, m.returnErr
+	}
+	return m.returnData, nil
+}
+
+func TestClient_PullRequest_WithPrxClient(t *testing.T) {
+	// Mock HTTP for changed files request
+	mockTransport := &mockRoundTripperFunc{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			// Handle changed files request
+			if strings.Contains(req.URL.Path, "/files") {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`[]`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			// Handle commit request
+			if strings.Contains(req.URL.Path, "/commits/") {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body: io.NopCloser(strings.NewReader(`{
+						"commit": {
+							"author": {"date": "2024-01-01T12:00:00Z"}
+						}
+					}`)),
+					Header: make(http.Header),
+				}, nil
+			}
+			// Handle reviews request
+			if strings.Contains(req.URL.Path, "/reviews") {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`[]`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	c := &Client{
+		cache:      mustNewCache(t),
+		httpClient: &http.Client{Transport: mockTransport},
+		token:      "test-token",
+		isAppAuth:  false,
+		prxClient: &mockPrxClient{
+			returnData: map[string]any{
+				"PullRequest": map[string]any{
+					"Number":             float64(123),
+					"Title":              "Test PR via Prx",
+					"State":              "open",
+					"Draft":              false,
+					"Author":             "alice",
+					"TestState":          "success",
+					"HeadSHA":            "abc123",
+					"CreatedAt":          "2024-01-01T10:00:00Z",
+					"UpdatedAt":          "2024-01-01T12:00:00Z",
+					"RequestedReviewers": []string{"bob"},
+					"Assignees":          []string{"charlie"},
+				},
+			},
+		},
+	}
+
+	pr, err := c.PullRequest(context.Background(), "owner", "repo", 123)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if pr.Number != 123 {
+		t.Errorf("expected PR number 123, got %d", pr.Number)
+	}
+	if pr.Title != "Test PR via Prx" {
+		t.Errorf("expected title 'Test PR via Prx', got %q", pr.Title)
+	}
+	if pr.Author != "alice" {
+		t.Errorf("expected author 'alice', got %q", pr.Author)
+	}
+	if pr.TestState != "success" {
+		t.Errorf("expected test state 'success', got %q", pr.TestState)
+	}
+}
+
+func TestClient_PullRequest_PrxError_FallbackToREST(t *testing.T) {
+	callCount := 0
+	mockTransport := &mockRoundTripperFunc{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			callCount++
+
+			// First call: PR details (REST fallback)
+			if strings.Contains(req.URL.Path, "/pulls/123") && !strings.Contains(req.URL.Path, "/files") {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body: io.NopCloser(strings.NewReader(`{
+						"number": 123,
+						"title": "REST Fallback PR",
+						"user": {"login": "bob"},
+						"created_at": "2024-01-01T10:00:00Z",
+						"updated_at": "2024-01-01T12:00:00Z",
+						"state": "open",
+						"draft": false,
+						"head": {"sha": "def456"},
+						"assignees": [],
+						"requested_reviewers": []
+					}`)),
+					Header: make(http.Header),
+				}, nil
+			}
+			// Handle files request
+			if strings.Contains(req.URL.Path, "/files") {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`[]`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	c := &Client{
+		cache:      mustNewCache(t),
+		httpClient: &http.Client{Transport: mockTransport},
+		token:      "test-token",
+		isAppAuth:  false,
+		prxClient: &mockPrxClient{
+			returnErr: fmt.Errorf("prx service unavailable"),
+		},
+	}
+
+	pr, err := c.PullRequest(context.Background(), "owner", "repo", 123)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have fallen back to REST API
+	if pr.Title != "REST Fallback PR" {
+		t.Errorf("expected title 'REST Fallback PR', got %q", pr.Title)
+	}
+	if pr.Author != "bob" {
+		t.Errorf("expected author 'bob', got %q", pr.Author)
+	}
+}
+
+func TestClient_convertPrxToPullRequest_InvalidData(t *testing.T) {
+	mockTransport := &mockRoundTripperFunc{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	c := &Client{
+		cache:      mustNewCache(t),
+		httpClient: &http.Client{Transport: mockTransport},
+		token:      "test-token",
+	}
+
+	// Pass data that can't be marshaled (contains a channel)
+	_, err := c.convertPrxToPullRequest(context.Background(), "owner", "repo", make(chan int))
+	if err == nil {
+		t.Error("expected error for invalid prx data")
+	}
+}
+
+func TestClient_doRequest_AppAuthWithOrg(t *testing.T) {
+	mockTransport := &mockRoundTripperFunc{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			// Verify Bearer authorization header is used for app auth
+			authHeader := req.Header.Get("Authorization")
+			if !strings.HasPrefix(authHeader, "Bearer ") {
+				t.Errorf("expected Bearer authorization for app auth, got: %q", authHeader)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	c := &Client{
+		cache:       mustNewCache(t),
+		httpClient:  &http.Client{Transport: mockTransport},
+		token:       "jwt-token",
+		isAppAuth:   true,
+		currentOrg:  "",                        // No org set, will use JWT directly
+		tokenExpiry: time.Now().Add(time.Hour), // Not expired
+	}
+
+	resp, err := c.doRequest(context.Background(), "GET", "https://api.github.com/test", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("failed to close response body: %v", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestClient_doRequest_RateLimited(t *testing.T) {
+	callCount := 0
+	mockTransport := &mockRoundTripperFunc{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			callCount++
+			if callCount == 1 {
+				// First call: return rate limit
+				return &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+					Body:       io.NopCloser(strings.NewReader(`{"message": "rate limited"}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			// Second call: success
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	c := &Client{
+		cache:      mustNewCache(t),
+		httpClient: &http.Client{Transport: mockTransport},
+		token:      "test-token",
+		isAppAuth:  false,
+	}
+
+	resp, err := c.doRequest(context.Background(), "GET", "https://api.github.com/test", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("failed to close response body: %v", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200 after retry, got %d", resp.StatusCode)
+	}
+
+	if callCount < 2 {
+		t.Errorf("expected at least 2 calls (retry after rate limit), got %d", callCount)
+	}
+}
+
+func TestClient_doRequest_WithBody(t *testing.T) {
+	var receivedBody string
+	mockTransport := &mockRoundTripperFunc{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			// Read the body
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Errorf("failed to read body: %v", err)
+			}
+			receivedBody = string(body)
+
+			// Verify Content-Type header
+			if req.Method == http.MethodPost && req.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("expected Content-Type application/json for POST")
+			}
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"status": "ok"}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	c := &Client{
+		cache:      mustNewCache(t),
+		httpClient: &http.Client{Transport: mockTransport},
+		token:      "test-token",
+		isAppAuth:  false,
+	}
+
+	requestBody := map[string]string{"key": "value"}
+	resp, err := c.doRequest(context.Background(), "POST", "https://api.github.com/test", requestBody)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("failed to close response body: %v", err)
+		}
+	}()
+
+	if !strings.Contains(receivedBody, "key") || !strings.Contains(receivedBody, "value") {
+		t.Errorf("expected body to contain key and value, got: %s", receivedBody)
+	}
+}
+
+func TestClient_Collaborators_CacheHit(t *testing.T) {
+	callCount := 0
+	mockTransport := &mockRoundTripperFunc{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			callCount++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body: io.NopCloser(strings.NewReader(`[
+					{"login": "alice", "type": "User"},
+					{"login": "bob", "type": "User"}
+				]`)),
+				Header: make(http.Header),
+			}, nil
+		},
+	}
+
+	c := &Client{
+		cache:      mustNewCache(t),
+		httpClient: &http.Client{Transport: mockTransport},
+		token:      "test-token",
+		isAppAuth:  false,
+	}
+
+	// First call - should hit API
+	collabs1, err := c.Collaborators(context.Background(), "owner", "repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(collabs1) != 2 {
+		t.Errorf("expected 2 collaborators, got %d", len(collabs1))
+	}
+	if callCount != 1 {
+		t.Errorf("expected 1 API call, got %d", callCount)
+	}
+
+	// Second call - should use cache
+	collabs2, err := c.Collaborators(context.Background(), "owner", "repo")
+	if err != nil {
+		t.Fatalf("unexpected error on cached call: %v", err)
+	}
+	if len(collabs2) != 2 {
+		t.Errorf("expected 2 collaborators from cache, got %d", len(collabs2))
+	}
+	if callCount != 1 {
+		t.Errorf("expected no additional API calls (cache hit), got %d total calls", callCount)
+	}
+}
+
+func TestClient_Collaborators_InvalidJSON(t *testing.T) {
+	mockTransport := &mockRoundTripperFunc{
+		roundTripFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`invalid json`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	c := &Client{
+		cache:      mustNewCache(t),
+		httpClient: &http.Client{Transport: mockTransport},
+		token:      "test-token",
+		isAppAuth:  false,
+	}
+
+	_, err := c.Collaborators(context.Background(), "owner", "repo")
 	if err == nil {
 		t.Error("expected error for invalid JSON")
 	}

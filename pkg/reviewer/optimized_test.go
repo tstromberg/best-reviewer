@@ -2,6 +2,7 @@ package reviewer
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -372,5 +373,169 @@ func TestFinder_findReviewersOptimized_WorkloadPenalty(t *testing.T) {
 	}
 	if charlieCandidate.ContextScore < 0 {
 		t.Error("charlie should have non-negative context score")
+	}
+}
+
+func TestFinder_findReviewersOptimized_BatchWorkloadError(t *testing.T) {
+	ctx := context.Background()
+	client := testutil.NewMockGitHubClient()
+	finder := New(client, Config{PRCountCache: time.Hour})
+
+	pr := &types.PullRequest{
+		Owner:      "test-owner",
+		Repository: "test-repo",
+		Number:     1,
+		Author:     "alice",
+		Assignees:  []string{"bob"},
+		ChangedFiles: []types.ChangedFile{
+			{Filename: "main.go", Additions: 10, Deletions: 5},
+		},
+	}
+
+	// Configure error for batch PR count
+	client.SetError("BatchOpenPRCount:test-owner", fmt.Errorf("rate limited"))
+
+	// Configure write access (bob should still be valid)
+	client.SetWriteAccess("test-owner", "test-repo", "bob", true)
+	client.SetBotUser("bob", false)
+
+	candidates := finder.findReviewersOptimized(ctx, pr)
+
+	// Should still return candidates even when workload fetch fails
+	if len(candidates) == 0 {
+		t.Error("expected candidates even when batch workload fetch fails")
+	}
+
+	found := false
+	for _, c := range candidates {
+		if c.Username == "bob" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'bob' in candidates")
+	}
+}
+
+func TestFinder_findReviewersOptimized_WorkloadPenaltyCapping(t *testing.T) {
+	ctx := context.Background()
+	client := testutil.NewMockGitHubClient()
+	finder := New(client, Config{PRCountCache: time.Hour})
+
+	pr := &types.PullRequest{
+		Owner:      "test-owner",
+		Repository: "test-repo",
+		Number:     1,
+		Author:     "alice",
+		Assignees:  []string{"bob"},
+		ChangedFiles: []types.ChangedFile{
+			{Filename: "main.go", Additions: 10, Deletions: 5},
+		},
+	}
+
+	// Bob has very high workload (100 PRs -> 1000 point penalty)
+	// But assignee weight is 200, so penalty caps at 100 (50% of 200)
+	client.SetBatchOpenPRCount("test-owner", map[string]int{
+		"bob": 100,
+	})
+
+	client.SetWriteAccess("test-owner", "test-repo", "bob", true)
+	client.SetBotUser("bob", false)
+
+	candidates := finder.findReviewersOptimized(ctx, pr)
+
+	if len(candidates) == 0 {
+		t.Fatal("expected at least 1 candidate")
+	}
+
+	// Find bob
+	var bobCandidate *types.ReviewerCandidate
+	for i := range candidates {
+		if candidates[i].Username == "bob" {
+			bobCandidate = &candidates[i]
+			break
+		}
+	}
+
+	if bobCandidate == nil {
+		t.Fatal("expected bob in candidates")
+	}
+
+	// Bob's score should be 200 (assignee) - 100 (capped penalty) = 100
+	// The penalty is capped at 50% of the weight
+	if bobCandidate.ContextScore < 100 {
+		t.Errorf("expected context score >= 100 due to penalty cap, got %d", bobCandidate.ContextScore)
+	}
+}
+
+func TestFinder_collectWeightedCandidates_NoChangedLines(t *testing.T) {
+	ctx := context.Background()
+	client := testutil.NewMockGitHubClient()
+	finder := New(client, Config{PRCountCache: time.Hour})
+
+	pr := &types.PullRequest{
+		Owner:      "test-owner",
+		Repository: "test-repo",
+		Number:     1,
+		Author:     "alice",
+		ChangedFiles: []types.ChangedFile{
+			{Filename: "binary.png", Patch: ""}, // No patch for binary
+		},
+	}
+
+	candidates := finder.collectWeightedCandidates(ctx, pr, []string{"binary.png"})
+
+	// Should return empty list since no changed lines
+	if len(candidates) != 0 {
+		t.Errorf("expected 0 candidates for file with no patch, got %d", len(candidates))
+	}
+}
+
+func TestFinder_topChangedFilesFiltered_NestedLockFile(t *testing.T) {
+	client := testutil.NewMockGitHubClient()
+	finder := New(client, Config{PRCountCache: time.Hour})
+
+	pr := &types.PullRequest{
+		ChangedFiles: []types.ChangedFile{
+			{Filename: "pkg/deps/go.sum", Additions: 100, Deletions: 50}, // Nested lock file
+			{Filename: "main.go", Additions: 10, Deletions: 5},
+		},
+	}
+
+	result := finder.topChangedFilesFiltered(pr, 2)
+
+	// Should filter out nested go.sum by basename
+	if len(result) != 1 {
+		t.Errorf("expected 1 file after filtering nested lock file, got %d", len(result))
+	}
+
+	if len(result) > 0 && result[0] != "main.go" {
+		t.Errorf("expected main.go, got %s", result[0])
+	}
+}
+
+func TestFinder_getChangedLines_InvalidHunkHeader(t *testing.T) {
+	client := testutil.NewMockGitHubClient()
+	finder := New(client, Config{PRCountCache: time.Hour})
+
+	pr := &types.PullRequest{
+		ChangedFiles: []types.ChangedFile{
+			{
+				Filename: "test.go",
+				Patch: `@@ invalid header
++ some line`,
+			},
+		},
+	}
+
+	lines, err := finder.getChangedLines(pr, "test.go")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should return empty when hunk header can't be parsed
+	if len(lines) != 0 {
+		t.Errorf("expected 0 line ranges for invalid hunk header, got %d", len(lines))
 	}
 }

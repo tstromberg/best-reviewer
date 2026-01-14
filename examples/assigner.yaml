@@ -1,0 +1,77 @@
+# Example configuration file for better-reviewers
+# Place this file at the root of a repository named .codeGROOVE in your organization
+#
+# All values shown are customizable. If a field is omitted, the default is used.
+
+# ============================================================================
+# Grace Periods (in minutes)
+# ============================================================================
+
+# Minimum wait time after a PR is updated before assigning reviewers.
+# Use a longer value if your team frequently pushes follow-up commits.
+# Default: 2
+min_grace_period: 15
+
+# Wait time when CI tests are pending, queued, or running.
+# Avoids assigning reviewers to PRs that may fail tests.
+# Default: 20
+pending_test_grace: 30
+
+# Wait time when CI tests are failing.
+# Gives the author time to fix failures before reviewers are assigned.
+# Default: 90
+failing_test_grace: 120
+
+# ============================================================================
+# Reviewer Assignment
+# ============================================================================
+
+# Maximum number of reviewers to assign per PR.
+# Default: 2
+max_reviewers: 2
+
+# Maximum open PRs a reviewer can have before being skipped.
+# Prevents overloading busy team members.
+# Default: 9
+max_prs_per_reviewer: 6
+
+# ============================================================================
+# PR Age Constraints (in hours)
+# ============================================================================
+
+# Minimum PR age before assignment.
+# Useful for giving authors time to mark PRs as draft or add context.
+# Default: 0
+min_age: 1
+
+# Maximum PR age to consider.
+# Ignores stale PRs older than this threshold.
+# Default: 8760 (1 year)
+max_age: 720
+
+# ============================================================================
+# Exclusions
+# ============================================================================
+
+# Users who should never be assigned as reviewers.
+# Useful for: bots, external contractors, people on leave, interns
+excluded_users:
+  - dependabot
+  - renovate
+  - github-actions
+  - release-please
+  - team-lead-on-leave
+  - intern-shadowing
+
+# Path patterns to ignore when calculating reviewer scores.
+# Changes to these paths won't contribute to reviewer selection.
+# Supports glob patterns.
+excluded_paths:
+  - "docs/**"
+  - "*.md"
+  - ".github/**"
+  - "vendor/**"
+  - "generated/**"
+  - "**/testdata/**"
+  - "**/*_generated.go"
+  - "go.sum"

@@ -1,11 +1,420 @@
 package reviewer
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/codeGROOVE-dev/best-reviewer/pkg/internal/testutil"
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/types"
 )
+
+// Exact query string from graphql.go for blame
+const blameQuery = `
+	query($owner: String!, $repo: String!, $path: String!) {
+		repository(owner: $owner, name: $repo) {
+			defaultBranchRef {
+				target {
+					... on Commit {
+						blame(path: $path) {
+							ranges {
+								startingLine
+								endingLine
+								commit {
+									oid
+									author {
+										user {
+											login
+										}
+									}
+									associatedPullRequests(first: 1) {
+										nodes {
+											number
+											merged
+											mergedAt
+											author {
+												login
+											}
+											mergedBy {
+												login
+											}
+											reviews(first: 10, states: APPROVED) {
+												nodes {
+													author {
+														login
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}`
+
+// TestFinder_collectWeightedCandidates_WithBlameResults tests the full blame processing flow.
+func TestFinder_collectWeightedCandidates_WithBlameResults(t *testing.T) {
+	ctx := context.Background()
+	client := testutil.NewMockGitHubClient()
+	finder := New(client, Config{PRCountCache: time.Hour})
+
+	// Set up blame response with overlapping and file-level PRs
+	blameResponse := map[string]any{
+		"data": map[string]any{
+			"repository": map[string]any{
+				"defaultBranchRef": map[string]any{
+					"target": map[string]any{
+						"blame": map[string]any{
+							"ranges": []any{
+								// First range overlaps with changed lines (10-20)
+								map[string]any{
+									"startingLine": float64(10),
+									"endingLine":   float64(15),
+									"commit": map[string]any{
+										"oid": "abc123",
+										"associatedPullRequests": map[string]any{
+											"nodes": []any{
+												map[string]any{
+													"number":   float64(100),
+													"merged":   true,
+													"mergedAt": time.Now().Add(-24 * time.Hour).Format(time.RFC3339),
+													"author": map[string]any{
+														"login": "expert-dev",
+													},
+													"mergedBy": map[string]any{
+														"login": "maintainer",
+													},
+													"reviews": map[string]any{
+														"nodes": []any{
+															map[string]any{
+																"author": map[string]any{
+																	"login": "senior-dev",
+																},
+															},
+														},
+													},
+												},
+											},
+										},
+									},
+								},
+								// Second range doesn't overlap (100-110), contributes to file-level
+								map[string]any{
+									"startingLine": float64(100),
+									"endingLine":   float64(110),
+									"commit": map[string]any{
+										"oid": "def456",
+										"associatedPullRequests": map[string]any{
+											"nodes": []any{
+												map[string]any{
+													"number":   float64(99),
+													"merged":   true,
+													"mergedAt": time.Now().Add(-48 * time.Hour).Format(time.RFC3339),
+													"author": map[string]any{
+														"login": "other-dev",
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetGraphQLResponse(blameQuery, blameResponse)
+
+	// Set up users as non-bots
+	client.SetBotUser("expert-dev", false)
+	client.SetBotUser("maintainer", false)
+	client.SetBotUser("senior-dev", false)
+	client.SetBotUser("other-dev", false)
+
+	pr := &types.PullRequest{
+		Owner:      "test-owner",
+		Repository: "test-repo",
+		Number:     1,
+		Author:     "alice",
+		ChangedFiles: []types.ChangedFile{
+			{
+				Filename:  "main.go",
+				Additions: 10,
+				Deletions: 5,
+				Patch:     "@@ -10,5 +10,7 @@ func main() {\n unchanged\n+added\n unchanged",
+			},
+		},
+	}
+
+	candidates := finder.collectWeightedCandidates(ctx, pr, []string{"main.go"})
+
+	// Should have candidates from blame results
+	if len(candidates) == 0 {
+		t.Fatal("expected candidates from blame results")
+	}
+
+	// Verify expert-dev and maintainer are in candidates (overlapping)
+	found := make(map[string]bool)
+	for _, c := range candidates {
+		found[c.username] = true
+	}
+
+	if !found["expert-dev"] {
+		t.Error("expected 'expert-dev' (blame author) in candidates")
+	}
+	if !found["maintainer"] {
+		t.Error("expected 'maintainer' (blame merger) in candidates")
+	}
+	if !found["senior-dev"] {
+		t.Error("expected 'senior-dev' (blame reviewer) in candidates")
+	}
+}
+
+// TestFinder_collectWeightedCandidates_WithFileLevelContributors tests file-level contributor scoring.
+func TestFinder_collectWeightedCandidates_WithFileLevelContributors(t *testing.T) {
+	ctx := context.Background()
+	client := testutil.NewMockGitHubClient()
+	finder := New(client, Config{PRCountCache: time.Hour})
+
+	// Set up blame response with file-level PRs (non-overlapping)
+	blameResponse := map[string]any{
+		"data": map[string]any{
+			"repository": map[string]any{
+				"defaultBranchRef": map[string]any{
+					"target": map[string]any{
+						"blame": map[string]any{
+							"ranges": []any{
+								// Overlapping PR
+								map[string]any{
+									"startingLine": float64(10),
+									"endingLine":   float64(15),
+									"commit": map[string]any{
+										"oid": "abc123",
+										"associatedPullRequests": map[string]any{
+											"nodes": []any{
+												map[string]any{
+													"number":   float64(100),
+													"merged":   true,
+													"mergedAt": time.Now().Add(-24 * time.Hour).Format(time.RFC3339),
+													"author": map[string]any{
+														"login": "overlapping-dev",
+													},
+													"mergedBy": map[string]any{
+														"login": "overlap-merger",
+													},
+												},
+											},
+										},
+									},
+								},
+								// Non-overlapping PR (within last year)
+								map[string]any{
+									"startingLine": float64(200),
+									"endingLine":   float64(210),
+									"commit": map[string]any{
+										"oid": "ghi789",
+										"associatedPullRequests": map[string]any{
+											"nodes": []any{
+												map[string]any{
+													"number":   float64(50),
+													"merged":   true,
+													"mergedAt": time.Now().Add(-30 * 24 * time.Hour).Format(time.RFC3339),
+													"author": map[string]any{
+														"login": "file-author",
+													},
+													"mergedBy": map[string]any{
+														"login": "file-merger",
+													},
+													"reviews": map[string]any{
+														"nodes": []any{
+															map[string]any{
+																"author": map[string]any{
+																	"login": "file-reviewer",
+																},
+															},
+														},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetGraphQLResponse(blameQuery, blameResponse)
+
+	// Set up users as non-bots
+	client.SetBotUser("overlapping-dev", false)
+	client.SetBotUser("overlap-merger", false)
+	client.SetBotUser("file-author", false)
+	client.SetBotUser("file-merger", false)
+	client.SetBotUser("file-reviewer", false)
+
+	pr := &types.PullRequest{
+		Owner:      "test-owner",
+		Repository: "test-repo",
+		Number:     1,
+		Author:     "alice",
+		ChangedFiles: []types.ChangedFile{
+			{
+				Filename:  "main.go",
+				Additions: 10,
+				Deletions: 5,
+				Patch:     "@@ -10,5 +10,7 @@ func main() {\n unchanged\n+added\n unchanged",
+			},
+		},
+	}
+
+	candidates := finder.collectWeightedCandidates(ctx, pr, []string{"main.go"})
+
+	if len(candidates) == 0 {
+		t.Fatal("expected candidates from blame results")
+	}
+
+	// Both overlapping and file-level contributors should be included
+	found := make(map[string]bool)
+	for _, c := range candidates {
+		found[c.username] = true
+	}
+
+	// Overlapping contributors
+	if !found["overlapping-dev"] {
+		t.Error("expected 'overlapping-dev' (overlapping author) in candidates")
+	}
+	if !found["overlap-merger"] {
+		t.Error("expected 'overlap-merger' (overlapping merger) in candidates")
+	}
+
+	// File-level contributors
+	if !found["file-author"] {
+		t.Error("expected 'file-author' (file-level author) in candidates")
+	}
+	if !found["file-merger"] {
+		t.Error("expected 'file-merger' (file-level merger) in candidates")
+	}
+	if !found["file-reviewer"] {
+		t.Error("expected 'file-reviewer' (file-level reviewer) in candidates")
+	}
+}
+
+// TestFinder_findReviewersOptimized_FullFlow tests the complete reviewer finding flow.
+func TestFinder_findReviewersOptimized_FullFlow(t *testing.T) {
+	ctx := context.Background()
+	client := testutil.NewMockGitHubClient()
+	finder := New(client, Config{PRCountCache: time.Hour})
+
+	// Set up blame response
+	blameResponse := map[string]any{
+		"data": map[string]any{
+			"repository": map[string]any{
+				"defaultBranchRef": map[string]any{
+					"target": map[string]any{
+						"blame": map[string]any{
+							"ranges": []any{
+								map[string]any{
+									"startingLine": float64(10),
+									"endingLine":   float64(15),
+									"commit": map[string]any{
+										"oid": "abc123",
+										"associatedPullRequests": map[string]any{
+											"nodes": []any{
+												map[string]any{
+													"number":   float64(100),
+													"merged":   true,
+													"mergedAt": time.Now().Add(-24 * time.Hour).Format(time.RFC3339),
+													"author": map[string]any{
+														"login": "bob",
+													},
+													"mergedBy": map[string]any{
+														"login": "charlie",
+													},
+													"reviews": map[string]any{
+														"nodes": []any{
+															map[string]any{
+																"author": map[string]any{
+																	"login": "dave",
+																},
+															},
+														},
+													},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetGraphQLResponse(blameQuery, blameResponse)
+
+	pr := &types.PullRequest{
+		Owner:      "test-owner",
+		Repository: "test-repo",
+		Number:     1,
+		Author:     "alice",
+		Assignees:  []string{"bob"},
+		ChangedFiles: []types.ChangedFile{
+			{
+				Filename:  "main.go",
+				Additions: 10,
+				Deletions: 5,
+				Patch:     "@@ -10,5 +10,7 @@ func main() {\n unchanged\n+added\n unchanged",
+			},
+		},
+	}
+
+	// Configure collaborators (large team to skip small team path)
+	client.SetCollaborators("test-owner", "test-repo", []string{"alice", "bob", "charlie", "dave"})
+	client.SetBotUser("alice", false)
+	client.SetBotUser("bob", false)
+	client.SetBotUser("charlie", false)
+	client.SetBotUser("dave", false)
+
+	// Configure write access
+	client.SetWriteAccess("test-owner", "test-repo", "bob", true)
+	client.SetWriteAccess("test-owner", "test-repo", "charlie", true)
+	client.SetWriteAccess("test-owner", "test-repo", "dave", true)
+
+	// Configure batch PR count
+	client.SetBatchOpenPRCount("test-owner", map[string]int{
+		"bob":     1,
+		"charlie": 2,
+		"dave":    0,
+	})
+
+	candidates := finder.findReviewersOptimized(ctx, pr)
+
+	if len(candidates) == 0 {
+		t.Fatal("expected candidates from full flow")
+	}
+
+	// Bob should be in candidates (assignee + blame author)
+	found := false
+	for _, c := range candidates {
+		if c.Username == "bob" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected 'bob' in candidates")
+	}
+}
 
 // TestGoModPR tests scoring for a dependency update PR (go.mod only changes).
 // This is based on https://github.com/chainguard-dev/go-grpc-kit/pull/483

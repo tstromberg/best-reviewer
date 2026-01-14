@@ -1,146 +1,116 @@
 # Better Reviewers
 
-A Go program that intelligently finds and assigns reviewers for GitHub pull requests based on code context and reviewer activity.
+Automated PR reviewer assignment based on git blame analysis and contributor workload.
 
-## Features
-
-- **Smart reviewer selection**: Context-based matching using code blame analysis and activity patterns
-- **Workload balancing**: Filters out overloaded reviewers (>9 non-stale open PRs)
-- **Stale PR filtering**: Only counts PRs updated within 90 days for accurate workload assessment
-- **Resilient API handling**: 25 retry attempts with exponential backoff (5s-20min) and intelligent caching
-- **Bot detection**: Comprehensive filtering of bots, service accounts, and organizations
-- **Multiple targets**: Single PR, project-wide, or organization-wide monitoring
-- **Polling support**: Continuous monitoring with configurable intervals
-- **Graceful degradation**: Continues operation even when secondary features fail
-- **Comprehensive logging**: Detailed decision tracking and performance insights
-- **Dry-run mode**: Test assignments without making changes
-
-## Installation
+## Build
 
 ```bash
-go build -o better-reviewers
+go build -o better-reviewers ./cmd/best-reviewer-bot
 ```
 
-## Prerequisites
+## Authentication
 
-- Go 1.21 or later
-- **For personal use**: GitHub CLI (`gh`) installed and authenticated
-- **For GitHub App mode**: 
-  - GitHub App ID (found in your app settings)
-  - GitHub App private key file (.pem file downloaded when creating the app)
-- GitHub token with appropriate permissions (repo access)
+### GitHub App (Production)
+
+```bash
+export GITHUB_APP_ID="123456"
+export GITHUB_APP_KEY="projects/PROJECT/secrets/SECRET/versions/latest"  # GCP Secret Manager
+# or
+export GITHUB_APP_KEY_PATH="/path/to/private-key.pem"  # Local file
+```
+
+Required App permissions: `repository:write`, `pull_requests:write`, `organization_members:read`
+
+### GitHub CLI (Development)
+
+```bash
+gh auth login
+```
 
 ## Usage
 
-### Single PR Analysis
-
 ```bash
-./better-reviewers -pr "https://github.com/owner/repo/pull/123"
+# Single PR
 ./better-reviewers -pr "owner/repo#123"
-```
 
-### Project Monitoring
-
-```bash
-./better-reviewers -project "owner/repo"
-```
-
-### Organization Monitoring
-
-```bash
-./better-reviewers -org "myorg"
-```
-
-### GitHub App Mode
-
-Monitor all organizations where your GitHub App is installed:
-
-```bash
-# Using command-line flags
-./better-reviewers --app-id "123456" --app-key "/path/to/private-key.pem"
-
-# Using environment variables with file path
-export GITHUB_APP_ID="123456"
-export GITHUB_APP_KEY_PATH="/path/to/private-key.pem"
-./better-reviewers
-
-# Using Google Secret Manager (recommended for production)
-export GITHUB_APP_ID="123456"
-# GITHUB_APP_KEY should be stored in Google Secret Manager
-./better-reviewers
-```
-
-### Polling Mode
-
-```bash
+# Project monitoring
 ./better-reviewers -project "owner/repo" -poll 1h
-```
 
-### Dry Run Mode
+# Organization monitoring
+./better-reviewers -org "myorg" -poll 1h
 
-```bash
+# GitHub App mode (monitors all installed orgs)
+./better-reviewers -poll 1h
+
+# Dry run
 ./better-reviewers -pr "owner/repo#123" -dry-run
 ```
 
-## Configuration Options
+## Flags
 
-### Command-Line Flags
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-pr` | | PR URL or `owner/repo#N` |
+| `-project` | | Repository to monitor |
+| `-org` | | Organization to monitor |
+| `--app-id` | | GitHub App ID (overrides env) |
+| `--app-key` | | App private key path (overrides env) |
+| `-poll` | | Polling interval (e.g. `1h`, `30m`) |
+| `-dry-run` | `false` | Preview without assigning |
+| `-min-age` | `1h` | Minimum PR age |
+| `-max-age` | `180d` | Maximum PR age |
+| `-max-prs` | `9` | Max open PRs per reviewer |
+| `-pr-count-cache` | `6h` | PR count cache TTL |
 
-- `-pr`: Pull request URL or reference
-- `-project`: GitHub project to monitor
-- `-org`: GitHub organization to monitor
-- `--app-id`: GitHub App ID for authentication
-- `--app-key`: Path to GitHub App private key file
-- `-poll`: Polling interval (e.g., 1h, 30m)
-- `-dry-run`: Run without making changes
-- `-min-age`: Minimum time since last activity (default: 1h)
-- `-max-age`: Maximum time since last activity (default: 180d)
-- `-max-prs`: Maximum open PRs per reviewer (default: 9)
-- `-pr-count-cache`: Cache duration for PR counts (default: 6h)
+## Per-Org Configuration
 
-### Environment Variables
+Create `.codeGROOVE/assigner.yaml` in any org repository:
 
-For GitHub App authentication:
-- `GITHUB_APP_ID`: Your GitHub App's ID
-- `GITHUB_APP_KEY`: Secret name in Google Secret Manager (recommended for production)
-- `GITHUB_APP_KEY_PATH`: Path to your app's private key file (for local development)
+```yaml
+min_grace_period: 2        # Minutes before assignment
+pending_test_grace: 20     # Minutes while tests pending
+failing_test_grace: 90     # Minutes while tests failing
+max_reviewers: 2
+max_prs_per_reviewer: 9
+min_age: 0                 # Hours
+max_age: 8760              # Hours (1 year)
 
-## GitHub App Setup
+excluded_users:
+  - bot-account
 
-1. Create a GitHub App in your organization settings
-2. Required permissions:
-   - Repository: Read & Write (for PR assignments)
-   - Pull requests: Read & Write
-   - Organization members: Read
-3. Download the private key when prompted
-4. Note your App ID from the app settings page
-5. Install the app on your organization(s)
-
-## How It Works
-
-1. **Analysis**: Examines PR changes, file history, and contributor patterns
-2. **Scoring**: Rates candidates based on:
-   - Code overlap with changed files
-   - Recent activity and expertise
-   - Current workload (open PRs)
-3. **Selection**: Chooses optimal reviewers avoiding overloaded contributors
-4. **Assignment**: Adds reviewers to PRs (unless in dry-run mode)
-
-## Security Notes
-
-- Private keys should have restricted permissions (not world-readable)
-- JWT tokens are automatically refreshed before expiry
-- All API responses are sanitized in logs
-- Token validation ensures only valid GitHub tokens are accepted
-
-## Testing
-
-Run in dry-run mode to preview reviewer assignments:
-
-```bash
-./better-reviewers --dry-run --pr https://github.com/owner/repo/pull/123
+excluded_paths:
+  - "vendor/**"
+  - "**/*.generated.go"
 ```
 
-## License
+## Algorithm
 
-[License details here]
+1. Fetch changed files from PR
+2. Run `git blame` on each file to identify contributors
+3. Score candidates by: code ownership weight, recent activity, current workload
+4. Filter out: PR author, bots, overloaded reviewers (>max_prs open)
+5. Assign top N reviewers
+
+## Deployment
+
+### Cloud Run
+
+```bash
+gcloud run deploy better-reviewers \
+  --image gcr.io/PROJECT/better-reviewers \
+  --set-env-vars GITHUB_APP_ID=123456 \
+  --set-secrets GITHUB_APP_KEY=github-app-key:latest
+```
+
+### Kubernetes
+
+```yaml
+env:
+  - name: GITHUB_APP_ID
+    value: "123456"
+  - name: GITHUB_APP_KEY
+    valueFrom:
+      secretKeyRef:
+        name: github-app-key
+        key: private-key
+```

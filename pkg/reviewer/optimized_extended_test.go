@@ -346,3 +346,219 @@ func TestFinder_parseDirectoryCommitsFromGraphQL_DirectCommit(t *testing.T) {
 		t.Errorf("expected author bob, got %s", prs[0].Author)
 	}
 }
+
+func TestFinder_parseDirectoryCommitsFromGraphQL_DuplicatePRDedup(t *testing.T) {
+	client := testutil.NewMockGitHubClient()
+	finder := New(client, Config{PRCountCache: time.Hour})
+
+	// Multiple commits from the same PR should be deduplicated
+	result := map[string]any{
+		"data": map[string]any{
+			"repository": map[string]any{
+				"defaultBranchRef": map[string]any{
+					"target": map[string]any{
+						"history": map[string]any{
+							"nodes": []any{
+								map[string]any{
+									"oid":             "abc123",
+									"messageHeadline": "First commit",
+									"author": map[string]any{
+										"user": map[string]any{
+											"login": "alice",
+										},
+									},
+									"associatedPullRequests": map[string]any{
+										"nodes": []any{
+											map[string]any{
+												"number":   float64(42),
+												"merged":   true,
+												"mergedAt": time.Now().Format(time.RFC3339),
+												"author": map[string]any{
+													"login": "alice",
+												},
+											},
+										},
+									},
+								},
+								map[string]any{
+									"oid":             "def456",
+									"messageHeadline": "Second commit from same PR",
+									"author": map[string]any{
+										"user": map[string]any{
+											"login": "alice",
+										},
+									},
+									"associatedPullRequests": map[string]any{
+										"nodes": []any{
+											map[string]any{
+												"number":   float64(42), // Same PR
+												"merged":   true,
+												"mergedAt": time.Now().Format(time.RFC3339),
+												"author": map[string]any{
+													"login": "alice",
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	prs := finder.parseDirectoryCommitsFromGraphQL(result)
+
+	// Should deduplicate to 1 PR
+	if len(prs) != 1 {
+		t.Errorf("expected 1 PR after dedup, got %d", len(prs))
+	}
+}
+
+func TestFinder_parseDirectoryCommitsFromGraphQL_DuplicateCommitAuthorDedup(t *testing.T) {
+	client := testutil.NewMockGitHubClient()
+	finder := New(client, Config{PRCountCache: time.Hour})
+
+	// Multiple direct commits from the same author should be deduplicated
+	result := map[string]any{
+		"data": map[string]any{
+			"repository": map[string]any{
+				"defaultBranchRef": map[string]any{
+					"target": map[string]any{
+						"history": map[string]any{
+							"nodes": []any{
+								map[string]any{
+									"oid":             "abc123",
+									"messageHeadline": "First direct commit",
+									"author": map[string]any{
+										"user": map[string]any{
+											"login": "bob",
+										},
+									},
+									"associatedPullRequests": map[string]any{
+										"nodes": []any{}, // No PR
+									},
+								},
+								map[string]any{
+									"oid":             "def456",
+									"messageHeadline": "Second direct commit from same author",
+									"author": map[string]any{
+										"user": map[string]any{
+											"login": "bob", // Same author
+										},
+									},
+									"associatedPullRequests": map[string]any{
+										"nodes": []any{}, // No PR
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	prs := finder.parseDirectoryCommitsFromGraphQL(result)
+
+	// Should deduplicate to 1 entry
+	if len(prs) != 1 {
+		t.Errorf("expected 1 entry after author dedup, got %d", len(prs))
+	}
+
+	if prs[0].Author != "bob" {
+		t.Errorf("expected author 'bob', got %s", prs[0].Author)
+	}
+}
+
+func TestFinder_parseDirectoryCommitsFromGraphQL_InvalidPRNode(t *testing.T) {
+	client := testutil.NewMockGitHubClient()
+	finder := New(client, Config{PRCountCache: time.Hour})
+
+	// PR node that is not a map - skipped without fallback to commit author
+	result := map[string]any{
+		"data": map[string]any{
+			"repository": map[string]any{
+				"defaultBranchRef": map[string]any{
+					"target": map[string]any{
+						"history": map[string]any{
+							"nodes": []any{
+								map[string]any{
+									"oid":             "abc123",
+									"messageHeadline": "Commit",
+									"author": map[string]any{
+										"user": map[string]any{
+											"login": "alice",
+										},
+									},
+									"associatedPullRequests": map[string]any{
+										"nodes": []any{
+											"not-a-map", // Invalid
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	prs := finder.parseDirectoryCommitsFromGraphQL(result)
+
+	// When PR node is invalid, it's skipped - no fallback to commit author
+	if len(prs) != 0 {
+		t.Errorf("expected 0 PR entries (invalid PR node skipped), got %d", len(prs))
+	}
+}
+
+func TestFinder_parseDirectoryCommitsFromGraphQL_UnmergedPR(t *testing.T) {
+	client := testutil.NewMockGitHubClient()
+	finder := New(client, Config{PRCountCache: time.Hour})
+
+	// PR that is not merged - parsePRNode returns nil, skipped
+	result := map[string]any{
+		"data": map[string]any{
+			"repository": map[string]any{
+				"defaultBranchRef": map[string]any{
+					"target": map[string]any{
+						"history": map[string]any{
+							"nodes": []any{
+								map[string]any{
+									"oid":             "abc123",
+									"messageHeadline": "Commit",
+									"author": map[string]any{
+										"user": map[string]any{
+											"login": "alice",
+										},
+									},
+									"associatedPullRequests": map[string]any{
+										"nodes": []any{
+											map[string]any{
+												"number": float64(42),
+												"merged": false, // Not merged
+												"author": map[string]any{
+													"login": "alice",
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	prs := finder.parseDirectoryCommitsFromGraphQL(result)
+
+	// Unmerged PRs are skipped, no fallback to commit author
+	if len(prs) != 0 {
+		t.Errorf("expected 0 PR entries (unmerged PR skipped), got %d", len(prs))
+	}
+}

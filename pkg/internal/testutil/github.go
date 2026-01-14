@@ -280,6 +280,11 @@ func (m *MockGitHubClient) MakeGraphQLRequest(ctx context.Context, query string,
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	// Check for global GraphQL error first
+	if err := m.errors["GraphQL"]; err != nil {
+		return nil, err
+	}
+
 	key := query
 	if err := m.errors[fmt.Sprintf("MakeGraphQLRequest:%s", key)]; err != nil {
 		return nil, err
@@ -355,6 +360,15 @@ func (m *MockGitHubClient) SetCollaborators(owner, repo string, collaborators []
 	m.collaborators[key] = collaborators
 }
 
+// SetCollaboratorsError configures an error to be returned for Collaborators.
+func (m *MockGitHubClient) SetCollaboratorsError(owner, repo, errMsg string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := fmt.Sprintf("Collaborators:%s/%s", owner, repo)
+	m.errors[key] = fmt.Errorf("%s", errMsg)
+}
+
 // SetBotUser configures a user as a bot.
 func (m *MockGitHubClient) SetBotUser(username string, isBot bool) {
 	m.mu.Lock()
@@ -395,6 +409,14 @@ func (m *MockGitHubClient) SetGraphQLResponse(query string, response map[string]
 	defer m.mu.Unlock()
 
 	m.graphQLResponses[query] = response
+}
+
+// SetGraphQLError configures an error to be returned for all GraphQL requests.
+func (m *MockGitHubClient) SetGraphQLError(errMsg string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.errors["GraphQL"] = fmt.Errorf("%s", errMsg)
 }
 
 // SetError configures an error for a specific method and parameters.
