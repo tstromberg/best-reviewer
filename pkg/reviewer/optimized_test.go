@@ -93,7 +93,7 @@ func TestFinder_topChangedFilesFiltered(t *testing.T) {
 	}
 }
 
-func TestFinder_getChangedLines(t *testing.T) {
+func TestFinder_changedLines(t *testing.T) {
 	client := testutil.NewMockGitHubClient()
 	finder := New(client, Config{PRCountCache: time.Hour})
 
@@ -189,7 +189,7 @@ func TestFinder_getChangedLines(t *testing.T) {
 				ChangedFiles: tt.changedFiles,
 			}
 
-			result, err := finder.getChangedLines(pr, tt.filename)
+			result, err := finder.changedLines(pr, tt.filename)
 
 			if tt.expectError {
 				if err == nil {
@@ -203,7 +203,7 @@ func TestFinder_getChangedLines(t *testing.T) {
 			}
 
 			if !reflect.DeepEqual(result, tt.expectedLines) {
-				t.Errorf("getChangedLines() = %v, want %v", result, tt.expectedLines)
+				t.Errorf("changedLines() = %v, want %v", result, tt.expectedLines)
 			}
 		})
 	}
@@ -515,7 +515,7 @@ func TestFinder_topChangedFilesFiltered_NestedLockFile(t *testing.T) {
 	}
 }
 
-func TestFinder_getChangedLines_InvalidHunkHeader(t *testing.T) {
+func TestFinder_changedLines_InvalidHunkHeader(t *testing.T) {
 	client := testutil.NewMockGitHubClient()
 	finder := New(client, Config{PRCountCache: time.Hour})
 
@@ -529,7 +529,7 @@ func TestFinder_getChangedLines_InvalidHunkHeader(t *testing.T) {
 		},
 	}
 
-	lines, err := finder.getChangedLines(pr, "test.go")
+	lines, err := finder.changedLines(pr, "test.go")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

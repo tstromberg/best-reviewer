@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/codeGROOVE-dev/best-reviewer/pkg/activity"
@@ -46,160 +47,175 @@ func (f *Finder) findReviewersOptimized(ctx context.Context, pr *types.PullReque
 		}
 	}
 
-	// Source 2: File history via blame (if we have changed files)
+	// Prepare for parallel data fetching
 	topFiles := f.topChangedFilesFiltered(pr, 3)
+
+	// Get unique directories from top changed files (for Source 3)
+	seenDirs := make(map[string]bool)
+	var dirs []string
+	for _, file := range topFiles {
+		dir := filepath.Dir(file)
+		if !seenDirs[dir] {
+			seenDirs[dir] = true
+			dirs = append(dirs, dir)
+		}
+	}
+
+	// Run Sources 2, 3, and 4 in parallel for better performance
+	var (
+		fileCandidates []candidateWeight
+		dirResults     [][]types.PRInfo // Results from each directory query
+		recentPRs      []types.PRInfo
+		wg             sync.WaitGroup
+	)
+
+	// Source 2: File history via blame (parallel)
 	if len(topFiles) > 0 {
-		slog.Info("Analyzing top files with largest changes", "count", len(topFiles))
-		fileCandidates := f.collectWeightedCandidates(ctx, pr, topFiles)
-		slog.Info("Found weighted candidates from file history", "count", len(fileCandidates))
-
-		// Merge file candidates into map
-		for _, fc := range fileCandidates {
-			if existing, exists := candidateMap[fc.username]; exists {
-				// Merge scores
-				existing.weight += fc.weight
-				maps.Copy(existing.sourceScores, fc.sourceScores)
-			} else {
-				candidateMap[fc.username] = &fc
-			}
-		}
-	} else {
-		slog.Info("No changed files to analyze, relying on other signals")
+		wg.Go(func() {
+			slog.Info("Analyzing top files with largest changes", "count", len(topFiles))
+			fileCandidates = f.collectWeightedCandidates(ctx, pr, topFiles)
+			slog.Info("Found weighted candidates from file history", "count", len(fileCandidates))
+		})
 	}
 
-	// Source 3: Directory-level contributions (last 10 commits to each directory)
-	//nolint:nestif // Nested logic required for multi-directory contributor analysis
-	if len(topFiles) > 0 {
-		// Get unique directories from top changed files
-		seenDirs := make(map[string]bool)
-		var dirs []string
-		for _, file := range topFiles {
-			dir := filepath.Dir(file)
-			if !seenDirs[dir] {
-				seenDirs[dir] = true
-				dirs = append(dirs, dir)
-			}
+	// Source 3: Directory-level contributions (parallel per directory)
+	if len(dirs) > 0 {
+		dirResults = make([][]types.PRInfo, len(dirs))
+		for i, dir := range dirs {
+			wg.Go(func() {
+				dirPRs, err := f.recentCommitsInDirectory(ctx, pr.Owner, pr.Repository, dir)
+				if err != nil {
+					slog.Warn("Failed to fetch directory commits, continuing without", "dir", dir, "error", err)
+					return
+				}
+				if len(dirPRs) > 0 {
+					slog.Info("Found recent commits/PRs in directory", "dir", dir, "count", len(dirPRs))
+					dirResults[i] = dirPRs // Safe: each goroutine writes to its own index
+				}
+			})
 		}
+	}
 
-		// Query each directory for recent commits
-		for _, dir := range dirs {
-			dirPRs, err := f.recentCommitsInDirectory(ctx, pr.Owner, pr.Repository, dir)
-			if err != nil {
-				slog.Warn("Failed to fetch directory commits, continuing without", "dir", dir, "error", err)
-				continue
-			}
+	// Source 4: Recent project activity (parallel)
+	wg.Go(func() {
+		var err error
+		recentPRs, err = f.recentPRsInProject(ctx, pr.Owner, pr.Repository)
+		if err != nil {
+			slog.Warn("Failed to fetch recent PRs, continuing without recent activity signal", "error", err)
+			recentPRs = nil
+		}
+	})
 
-			if len(dirPRs) == 0 {
-				continue
-			}
+	// Wait for all parallel fetches to complete
+	wg.Wait()
 
-			slog.Info("Found recent commits/PRs in directory", "dir", dir, "count", len(dirPRs))
-			// Add directory contributors with moderate weight (+3 per PR involvement)
-			for _, dirPR := range dirPRs {
-				dirWeight := 3
+	// Merge Source 2 results (file candidates)
+	for _, fc := range fileCandidates {
+		if existing, exists := candidateMap[fc.username]; exists {
+			existing.weight += fc.weight
+			maps.Copy(existing.sourceScores, fc.sourceScores)
+		} else {
+			candidateMap[fc.username] = &fc
+		}
+	}
 
-				if dirPR.Author != "" && !f.client.IsUserBot(ctx, dirPR.Author) {
-					if existing, exists := candidateMap[dirPR.Author]; exists {
-						existing.weight += dirWeight
-						if existing.sourceScores["dir-author"] == 0 {
-							existing.sourceScores["dir-author"] = dirWeight
-						} else {
-							existing.sourceScores["dir-author"] += dirWeight
-						}
+	// Merge Source 3 results (directory contributors)
+	for _, dirPRs := range dirResults {
+		for _, dirPR := range dirPRs {
+			dirWeight := 3
+
+			if dirPR.Author != "" && !f.client.IsUserBot(ctx, dirPR.Author) {
+				if existing, exists := candidateMap[dirPR.Author]; exists {
+					existing.weight += dirWeight
+					if existing.sourceScores["dir-author"] == 0 {
+						existing.sourceScores["dir-author"] = dirWeight
 					} else {
-						candidateMap[dirPR.Author] = &candidateWeight{
-							username:     dirPR.Author,
-							weight:       dirWeight,
-							sourceScores: map[string]int{"dir-author": dirWeight},
-						}
+						existing.sourceScores["dir-author"] += dirWeight
+					}
+				} else {
+					candidateMap[dirPR.Author] = &candidateWeight{
+						username:     dirPR.Author,
+						weight:       dirWeight,
+						sourceScores: map[string]int{"dir-author": dirWeight},
 					}
 				}
+			}
 
-				if dirPR.MergedBy != "" && !f.client.IsUserBot(ctx, dirPR.MergedBy) {
-					mergeWeight := dirWeight * 2
-					if existing, exists := candidateMap[dirPR.MergedBy]; exists {
-						existing.weight += mergeWeight
-						if existing.sourceScores["dir-merger"] == 0 {
-							existing.sourceScores["dir-merger"] = mergeWeight
-						} else {
-							existing.sourceScores["dir-merger"] += mergeWeight
-						}
+			if dirPR.MergedBy != "" && !f.client.IsUserBot(ctx, dirPR.MergedBy) {
+				mergeWeight := dirWeight * 2
+				if existing, exists := candidateMap[dirPR.MergedBy]; exists {
+					existing.weight += mergeWeight
+					if existing.sourceScores["dir-merger"] == 0 {
+						existing.sourceScores["dir-merger"] = mergeWeight
 					} else {
-						candidateMap[dirPR.MergedBy] = &candidateWeight{
-							username:     dirPR.MergedBy,
-							weight:       mergeWeight,
-							sourceScores: map[string]int{"dir-merger": mergeWeight},
-						}
+						existing.sourceScores["dir-merger"] += mergeWeight
 					}
-				}
-
-				for _, reviewer := range dirPR.Reviewers {
-					if reviewer != "" && !f.client.IsUserBot(ctx, reviewer) {
-						if existing, exists := candidateMap[reviewer]; exists {
-							existing.weight += dirWeight
-							if existing.sourceScores["dir-reviewer"] == 0 {
-								existing.sourceScores["dir-reviewer"] = dirWeight
-							} else {
-								existing.sourceScores["dir-reviewer"] += dirWeight
-							}
-						} else {
-							candidateMap[reviewer] = &candidateWeight{
-								username:     reviewer,
-								weight:       dirWeight,
-								sourceScores: map[string]int{"dir-reviewer": dirWeight},
-							}
-						}
+				} else {
+					candidateMap[dirPR.MergedBy] = &candidateWeight{
+						username:     dirPR.MergedBy,
+						weight:       mergeWeight,
+						sourceScores: map[string]int{"dir-merger": mergeWeight},
 					}
 				}
 			}
-		}
-	}
 
-	// Source 4: Recent project activity (last 200 PRs)
-	recentPRs, err := f.recentPRsInProject(ctx, pr.Owner, pr.Repository)
-	if err != nil {
-		slog.Warn("Failed to fetch recent PRs, continuing without recent activity signal", "error", err)
-		recentPRs = nil
-	}
-
-	recentActivityScores := make(map[string]int)
-	if len(recentPRs) > 0 {
-		for _, recentPR := range recentPRs {
-			if recentPR.Author != "" && !f.client.IsUserBot(ctx, recentPR.Author) {
-				recentActivityScores[recentPR.Author]++ // +1 for authoring
-			}
-			if recentPR.MergedBy != "" && !f.client.IsUserBot(ctx, recentPR.MergedBy) {
-				recentActivityScores[recentPR.MergedBy]++ // +1 for merging
-			}
-			for _, reviewer := range recentPR.Reviewers {
+			for _, reviewer := range dirPR.Reviewers {
 				if reviewer != "" && !f.client.IsUserBot(ctx, reviewer) {
-					recentActivityScores[reviewer]++ // +1 for reviewing
+					if existing, exists := candidateMap[reviewer]; exists {
+						existing.weight += dirWeight
+						if existing.sourceScores["dir-reviewer"] == 0 {
+							existing.sourceScores["dir-reviewer"] = dirWeight
+						} else {
+							existing.sourceScores["dir-reviewer"] += dirWeight
+						}
+					} else {
+						candidateMap[reviewer] = &candidateWeight{
+							username:     reviewer,
+							weight:       dirWeight,
+							sourceScores: map[string]int{"dir-reviewer": dirWeight},
+						}
+					}
 				}
 			}
 		}
-		slog.Info("Built recent activity scores", "contributors", len(recentActivityScores), "from_prs", len(recentPRs))
+	}
+
+	// Merge Source 4 results (recent activity scores)
+	recent := make(map[string]int)
+	for _, p := range recentPRs {
+		if p.Author != "" && !f.client.IsUserBot(ctx, p.Author) {
+			recent[p.Author]++ // +1 for authoring
+		}
+		if p.MergedBy != "" && !f.client.IsUserBot(ctx, p.MergedBy) {
+			recent[p.MergedBy]++ // +1 for merging
+		}
+		for _, r := range p.Reviewers {
+			if r != "" && !f.client.IsUserBot(ctx, r) {
+				recent[r]++ // +1 for reviewing
+			}
+		}
+	}
+	if len(recent) > 0 {
+		slog.Info("Built recent activity scores", "contributors", len(recent), "from_prs", len(recentPRs))
 	}
 
 	// Merge recent activity scores into candidate map (scaled down by 10x to avoid overwhelming other signals)
-	for username, activityScore := range recentActivityScores {
-		// Scale down by 10x - recent activity is a weak signal compared to file/line expertise
-		scaledScore := activityScore / 10
-		if scaledScore == 0 && activityScore > 0 {
-			scaledScore = 1 // Ensure at least 1 point if they have any activity
+	for user, score := range recent {
+		s := score / 10
+		if s == 0 && score > 0 {
+			s = 1 // Ensure at least 1 point if they have any activity
 		}
 
-		if existing, exists := candidateMap[username]; exists {
-			// Add to existing candidate
-			existing.weight += scaledScore
-			existing.sourceScores["recent-activity"] = scaledScore
-			slog.Debug("Added recent activity to existing candidate", "username", username, "activity_score", scaledScore)
+		if c, ok := candidateMap[user]; ok {
+			c.weight += s
+			c.sourceScores["recent-activity"] = s
+			slog.Debug("Added recent activity to existing candidate", "username", user, "activity_score", s)
 		} else {
-			// Create new candidate from recent activity alone
-			slog.Info("Adding candidate from recent activity only", "username", username, "activity_score", scaledScore)
-			candidateMap[username] = &candidateWeight{
-				username:     username,
-				weight:       scaledScore,
-				sourceScores: map[string]int{"recent-activity": scaledScore},
+			slog.Info("Adding candidate from recent activity only", "username", user, "activity_score", s)
+			candidateMap[user] = &candidateWeight{
+				username:     user,
+				weight:       s,
+				sourceScores: map[string]int{"recent-activity": s},
 			}
 		}
 	}
@@ -219,7 +235,7 @@ func (f *Finder) findReviewersOptimized(ctx context.Context, pr *types.PullReque
 			continue
 		}
 		// Filter by recent activity (must be in last 200 PRs)
-		if len(recentActivityScores) > 0 && recentActivityScores[c.username] == 0 {
+		if len(recent) > 0 && recent[c.username] == 0 {
 			slog.Info("Filtered out candidate", "username", c.username, "reason", "not in recent 200 PRs")
 			continue
 		}
@@ -249,58 +265,58 @@ func (f *Finder) findReviewersOptimized(ctx context.Context, pr *types.PullReque
 	}
 
 	// Only check workload for top 5 candidates (optimization to reduce API calls)
-	workloadCheckLimit := min(5, len(validCandidates))
+	n := min(5, len(validCandidates))
 
 	// Batch fetch workload for top candidates
-	topUsernames := make([]string, workloadCheckLimit)
-	for i := range workloadCheckLimit {
-		topUsernames[i] = validCandidates[i].username
+	users := make([]string, n)
+	for i := range n {
+		users[i] = validCandidates[i].username
 	}
 
-	workloadCounts, err := f.client.BatchOpenPRCount(ctx, pr.Owner, topUsernames, f.prCountCache)
+	counts, err := f.client.BatchOpenPRCount(ctx, pr.Owner, users, f.prCountCache)
 	if err != nil {
 		slog.Warn("Failed to batch fetch workload, continuing without penalties", "error", err)
-		workloadCounts = make(map[string]int)
+		counts = make(map[string]int)
 	}
 
 	// Apply workload penalties to top candidates (10 points per PR, capped at 50% of score)
-	for i := range workloadCheckLimit {
-		username := validCandidates[i].username
-		prCount := workloadCounts[username]
-		rawPenalty := prCount * 10
+	for i := range n {
+		user := validCandidates[i].username
+		prCount := counts[user]
+		raw := prCount * 10
 
 		// Cap penalty at 50% of expertise score to avoid driving highly contexted people negative
 		maxPenalty := validCandidates[i].weight / 2
-		penalty := rawPenalty
+		penalty := raw
 		if penalty > maxPenalty {
 			penalty = maxPenalty
 			slog.Info("Capped workload penalty",
-				"username", username, "pr_count", prCount,
-				"raw_penalty", rawPenalty, "capped_penalty", penalty,
+				"username", user, "pr_count", prCount,
+				"raw_penalty", raw, "capped_penalty", penalty,
 				"weight", validCandidates[i].weight)
 		}
 
 		validCandidates[i].workloadPenalty = penalty
 		validCandidates[i].finalScore = validCandidates[i].weight - penalty
 		slog.Info("Applied workload penalty",
-			"username", username, "pr_count", prCount, "penalty", penalty,
+			"username", user, "pr_count", prCount, "penalty", penalty,
 			"weight", validCandidates[i].weight, "final_score", validCandidates[i].finalScore)
 	}
 
 	// Apply timing boost based on activity during current UTC time bucket
-	timelines := f.activityManager.Timelines(ctx, pr.Owner, topUsernames)
-	currentHour := time.Now().UTC().Hour()
-	for i := range workloadCheckLimit {
-		username := validCandidates[i].username
-		timeline := timelines[username]
-		boost := activity.TimingBoost(timeline, validCandidates[i].finalScore)
+	timelines := f.activityManager.Timelines(ctx, pr.Owner, users)
+	hour := time.Now().UTC().Hour()
+	for i := range n {
+		user := validCandidates[i].username
+		tl := timelines[user]
+		boost := activity.TimingBoost(tl, validCandidates[i].finalScore)
 		if boost > 0 {
 			validCandidates[i].timingBoost = boost
 			validCandidates[i].finalScore += boost
 			validCandidates[i].sourceScores["timing"] = boost
 			slog.Info("Applied timing boost",
-				"username", username, "boost", boost,
-				"bucket", currentHour/3, "final_score", validCandidates[i].finalScore)
+				"username", user, "boost", boost,
+				"bucket", hour/3, "final_score", validCandidates[i].finalScore)
 		}
 	}
 
@@ -421,36 +437,62 @@ func (*Finder) topChangedFilesFiltered(pr *types.PullRequest, n int) []string {
 }
 
 // collectWeightedCandidates collects candidates using GitHub blame API to find line-level experts.
+// Fetches blame for all files in parallel for better performance.
 //
 //nolint:gocognit // High complexity required for line-level blame analysis and scoring
 func (f *Finder) collectWeightedCandidates(ctx context.Context, pr *types.PullRequest, files []string) []candidateWeight {
 	candidateMap := make(map[string]*candidateWeight)
 
-	// Use blame API to find who last touched the lines being modified
+	// Prepare blame requests for all files
+	type blameRequest struct {
+		file         string
+		changedLines [][2]int
+	}
+	var requests []blameRequest
 	for _, file := range files {
-		// Get the changed lines for this file in the current PR
-		changedLines, err := f.getChangedLines(pr, file)
+		changedLines, err := f.changedLines(pr, file)
 		if err != nil {
 			slog.Warn("Failed to get changed lines", "file", file, "error", err)
 			continue
 		}
-
 		if len(changedLines) == 0 {
 			slog.Debug("No changed lines found", "file", file)
 			continue
 		}
+		requests = append(requests, blameRequest{file: file, changedLines: changedLines})
+	}
 
-		slog.Info("Analyzing changed lines with blame", "file", file, "line_ranges", len(changedLines))
+	if len(requests) == 0 {
+		return nil
+	}
 
-		// Use blame to find PRs that touched these lines (overlapping) and file (non-overlapping)
-		overlappingPRs, filePRs, err := f.blameForLines(ctx, pr.Owner, pr.Repository, file, changedLines)
-		if err != nil {
-			slog.Warn("Failed to get blame", "file", file, "error", err)
+	// Fetch blame for all files in parallel
+	type blameResult struct {
+		err            error
+		file           string
+		overlappingPRs []types.PRInfo
+		filePRs        []types.PRInfo
+	}
+	results := make(chan blameResult, len(requests))
+
+	for _, req := range requests {
+		go func(r blameRequest) {
+			slog.Info("Analyzing changed lines with blame", "file", r.file, "line_ranges", len(r.changedLines))
+			overlapping, filePRs, err := f.blameForLines(ctx, pr.Owner, pr.Repository, r.file, r.changedLines)
+			results <- blameResult{file: r.file, overlappingPRs: overlapping, filePRs: filePRs, err: err}
+		}(req)
+	}
+
+	// Collect results from all parallel blame requests
+	for range requests {
+		result := <-results
+		if result.err != nil {
+			slog.Warn("Failed to get blame", "file", result.file, "error", result.err)
 			continue
 		}
 
 		// Score candidates from overlapping blame results (full weight)
-		for _, blamePR := range overlappingPRs {
+		for _, blamePR := range result.overlappingPRs {
 			lineCount := blamePR.LineCount
 			if lineCount == 0 {
 				lineCount = 1
@@ -501,7 +543,7 @@ func (f *Finder) collectWeightedCandidates(ctx context.Context, pr *types.PullRe
 		}
 
 		// Score candidates from file-level contributions (lower weight - recent file editors)
-		for _, filePR := range filePRs {
+		for _, filePR := range result.filePRs {
 			// Give +5 points for recently touching the file (even if not exact lines)
 			fileWeight := 5
 
@@ -575,11 +617,11 @@ func (f *Finder) collectWeightedCandidates(ctx context.Context, pr *types.PullRe
 	return candidates
 }
 
-// getChangedLines extracts the line ranges that were modified in a file for this PR.
+// changedLines extracts the line ranges that were modified in a file for this PR.
 // Returns array of [startLine, endLine] pairs.
 //
 //nolint:unparam // Error return kept for interface consistency and future extensibility
-func (*Finder) getChangedLines(pr *types.PullRequest, filename string) ([][2]int, error) {
+func (*Finder) changedLines(pr *types.PullRequest, filename string) ([][2]int, error) {
 	// Find the file in the PR's changed files
 	var targetFile *types.ChangedFile
 	for i := range pr.ChangedFiles {

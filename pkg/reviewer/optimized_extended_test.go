@@ -37,7 +37,7 @@ func TestFinder_findReviewersOptimized_NoFiles(t *testing.T) {
 // Note: topChangedFilesFiltered only filters lock files, not vendor/node_modules directories.
 // That filtering is already tested in optimized_test.go
 
-func TestFinder_getChangedLines_MultipleSections(t *testing.T) {
+func TestFinder_changedLines_MultipleSections(t *testing.T) {
 	client := testutil.NewMockGitHubClient()
 	finder := New(client, Config{PRCountCache: time.Hour})
 
@@ -58,7 +58,7 @@ func TestFinder_getChangedLines_MultipleSections(t *testing.T) {
 		},
 	}
 
-	lines, err := finder.getChangedLines(pr, "main.go")
+	lines, err := finder.changedLines(pr, "main.go")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestFinder_getChangedLines_MultipleSections(t *testing.T) {
 	}
 }
 
-func TestFinder_getChangedLines_NoPatch(t *testing.T) {
+func TestFinder_changedLines_NoPatch(t *testing.T) {
 	client := testutil.NewMockGitHubClient()
 	finder := New(client, Config{PRCountCache: time.Hour})
 
@@ -87,7 +87,7 @@ func TestFinder_getChangedLines_NoPatch(t *testing.T) {
 		},
 	}
 
-	lines, err := finder.getChangedLines(pr, "binary.png")
+	lines, err := finder.changedLines(pr, "binary.png")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
